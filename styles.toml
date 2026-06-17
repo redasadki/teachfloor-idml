@@ -1,0 +1,157 @@
+# =============================================================================
+# styles.toml — idml-to-teachfloor configuration
+# =============================================================================
+# Edit this file to adapt the converter to a different InDesign template.
+# The script (idml_to_teachfloor_md.py) never needs to be modified.
+#
+# Pass a custom config file with:
+#   python3 idml_to_teachfloor_md.py MyReport-IDML/ out.md --config my.toml
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# [settings] — general conversion behaviour
+# -----------------------------------------------------------------------------
+[settings]
+
+# Role assigned to any paragraph style not listed in [style_map] below.
+# Options: "body" | "skip"
+# "body"  — unmapped styles are included as plain text (safe default)
+# "skip"  — unmapped styles are silently dropped
+default_role = "body"
+
+# FontStyle substrings that mean BOLD.
+# Add entries if your font family uses unusual weight names.
+bold_keywords = ["bold", "semibold", "extrabold", "black"]
+
+# FontStyle substrings that mean ITALIC.
+italic_keywords = ["italic", "oblique"]
+
+
+# -----------------------------------------------------------------------------
+# [style_map] — InDesign paragraph style → Teachfloor semantic role
+# -----------------------------------------------------------------------------
+# Keys   : InDesign paragraph style names, case-insensitive.
+#          The "ParagraphStyle/" path prefix is stripped automatically.
+# Values : one of the roles listed below.
+#
+# Roles
+# ─────
+#   lesson_title   →  ---\n# Title    New Teachfloor lesson (module break)
+#   element_title  →  # Title           New content element within a lesson
+#   h2             →  ## Heading        Sub-heading
+#   quote          →  > text            Verbatim direct quote / testimonial
+#   citation_name  →  **Name**          Bold attribution after a quote
+#   citation_role  →  *Role, Org*       Italic role line after citation name
+#   ul             →  - item            Bullet list item
+#   ol             →  1. item           Numbered list item
+#   body           →  plain paragraph   Body / editorial text
+#   skip           →  (omitted)         Dropped entirely (headers, TOC, etc.)
+# -----------------------------------------------------------------------------
+[style_map]
+
+# ── Lesson titles ─────────────────────────────────────────────────────────────
+"title 1"           = "lesson_title"
+"title 1 blue"      = "lesson_title"
+"title 1 grey"      = "lesson_title"
+"title white large" = "lesson_title"
+"title 1 purple"    = "lesson_title"
+"title 1 brown"     = "lesson_title"
+"title 1 orange"    = "lesson_title"
+"title 1 green"     = "lesson_title"
+"cover"             = "lesson_title"
+
+# ── Element titles ────────────────────────────────────────────────────────────
+"title 2 blue"   = "element_title"
+"title 2 white"  = "element_title"
+"title 2 brown"  = "element_title"
+"title 2 orange" = "element_title"
+"title box"      = "element_title"
+"annex hpv"      = "element_title"
+"annex measles"  = "element_title"
+
+# ── Sub-headings ──────────────────────────────────────────────────────────────
+"title 3"           = "h2"
+"title 3 blue"      = "h2"
+"boxes title"       = "h2"
+"talking points 1"  = "h2"
+"conclusions title" = "h2"
+"action plan title" = "h2"
+"kf country blue"   = "h2"
+"kf country orange" = "h2"
+"kf country green"  = "h2"
+"kf country purple" = "h2"
+"kf country brown"  = "h2"
+"country contr"     = "h2"
+
+# ── Verbatim direct quotes ───────────────────────────────────────────────────────
+"citations"        = "quote"
+"citations orange" = "quote"
+"comment02"        = "quote"
+"kf normal"        = "quote"
+
+# ── Editorial / intro paragraphs (NOT first-person quotes) ─────────────────────
+"executive quotes" = "body"
+"chapo"            = "body"
+
+# ── Citation name (bold attribution after a quote) ───────────────────────────
+"citation 2"        = "citation_name"
+"citation 2 orange" = "citation_name"
+"kf first"          = "citation_name"
+"kf first green"    = "citation_name"
+"kfa name"          = "citation_name"
+"kfa name2"         = "citation_name"
+
+# ── Citation role (italic attribution after name) ────────────────────────────
+"kf ref blue"        = "citation_role"
+"kf ref orange"      = "citation_role"
+"kf ref green"       = "citation_role"
+"kf ref purple"      = "citation_role"
+"citations 3"        = "citation_role"
+"citations 3 orange" = "citation_role"
+
+# ── Bullet lists ────────────────────────────────────────────────────────────────
+"bullet blue"             = "ul"
+"bullet brown"            = "ul"
+"bullet grey"             = "ul"
+"bullet brown 2"          = "ul"
+"bullet grey 2"           = "ul"
+"bullet blue ital bullet" = "ul"
+"bullet white text 2"     = "ul"
+"bullet whte text"        = "ul"
+"boxes bullet"            = "ul"
+"talking points 2"        = "ul"
+"talking points 3"        = "ul"
+"votes bullets"           = "ul"
+"kf bullets blue"         = "ul"
+"kf bullets orange"       = "ul"
+"kf bullets green"        = "ul"
+"kf bullets purple"       = "ul"
+"citation bullet"         = "ul"
+
+# ── Numbered lists ──────────────────────────────────────────────────────────────
+"num" = "ol"
+
+# ── Body text ───────────────────────────────────────────────────────────────────
+"normal"              = "body"
+"normal shared"       = "body"
+"normal shared white" = "body"
+"questions"           = "body"
+"big story txt"       = "body"
+"bigstory end"        = "body"
+"blue centered"       = "body"
+"contributors"        = "body"
+"boxes"               = "body"
+"bo bolder"           = "body"
+"notes"               = "body"
+"action plans"        = "body"
+"conclusions"         = "body"
+"big story"           = "body"
+
+# ── Skip entirely (page furniture, TOC, copyright notices) ───────────────────
+"copyright" = "skip"
+"margin1"   = "skip"
+"margin2"   = "skip"
+"tdm 1"     = "skip"
+"tdm 2"     = "skip"
+"header"    = "skip"
