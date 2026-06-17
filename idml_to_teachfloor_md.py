@@ -20,6 +20,8 @@ Usage:
     [output.md]     Output path (default: <idml_folder>/output.md)
 """
 
+__version__ = "1.1.0"
+
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -45,7 +47,7 @@ from pathlib import Path
 #   skip           → (omitted)         Headers, margins, TOC, copyright
 
 STYLE_MAP = {
-    # ── Lesson titles ────────────────────────────────────────────────────
+    # ── Lesson titles ────────────────────────────────────────────────────────────
     "title 1":                  "lesson_title",
     "title 1 blue":             "lesson_title",
     "title 1 grey":             "lesson_title",
@@ -56,7 +58,7 @@ STYLE_MAP = {
     "title 1 green":            "lesson_title",
     "cover":                    "lesson_title",
 
-    # ── Element titles ──────────────────────────────────────────────────────
+    # ── Element titles ───────────────────────────────────────────────────────────
     "title 2 blue":             "element_title",
     "title 2 white":            "element_title",
     "title 2 brown":            "element_title",
@@ -65,7 +67,7 @@ STYLE_MAP = {
     "annex hpv":                "element_title",
     "annex measles":            "element_title",
 
-    # ── Sub-headings ──────────────────────────────────────────────────────────
+    # ── Sub-headings ─────────────────────────────────────────────────────────────
     "title 3":                  "h2",
     "title 3 blue":             "h2",
     "boxes title":              "h2",
@@ -79,17 +81,17 @@ STYLE_MAP = {
     "kf country brown":         "h2",
     "country contr":            "h2",
 
-    # ── ACTUAL direct quotes (verbatim first-person speech) ─────────────────────
+    # ── ACTUAL direct quotes (verbatim first-person speech) ──────────────────────
     "citations":                "quote",
     "citations orange":         "quote",
     "comment02":                "quote",
     "kf normal":                "quote",
 
-    # ── NOT quotes: editorial summary / intro paragraphs ───────────────────────
+    # ── NOT quotes: editorial summary / intro paragraphs ─────────────────────────
     "executive quotes":         "body",
     "chapo":                    "body",
 
-    # ── Citation name (bold attribution after a quote) ─────────────────────────
+    # ── Citation name (bold attribution after a quote) ───────────────────────────
     "citation 2":               "citation_name",
     "citation 2 orange":        "citation_name",
     "kf first":                 "citation_name",
@@ -97,7 +99,7 @@ STYLE_MAP = {
     "kfa name":                 "citation_name",
     "kfa name2":                "citation_name",
 
-    # ── Citation role (italic attribution after name) ─────────────────────────
+    # ── Citation role (italic attribution after name) ────────────────────────────
     "kf ref blue":              "citation_role",
     "kf ref orange":            "citation_role",
     "kf ref green":             "citation_role",
@@ -105,7 +107,7 @@ STYLE_MAP = {
     "citations 3":              "citation_role",
     "citations 3 orange":       "citation_role",
 
-    # ── Bullet lists ───────────────────────────────────────────────────────────────
+    # ── Bullet lists ─────────────────────────────────────────────────────────────
     "bullet blue":              "ul",
     "bullet brown":             "ul",
     "bullet grey":              "ul",
@@ -127,7 +129,7 @@ STYLE_MAP = {
     # ── Numbered lists ───────────────────────────────────────────────────────────
     "num":                      "ol",
 
-    # ── Body text ─────────────────────────────────────────────────────────────────
+    # ── Body text ────────────────────────────────────────────────────────────────
     "normal":                   "body",
     "normal shared":            "body",
     "normal shared white":      "body",
@@ -143,7 +145,7 @@ STYLE_MAP = {
     "conclusions":              "body",
     "big story":                "body",
 
-    # ── Skip entirely ───────────────────────────────────────────────────────────────
+    # ── Skip entirely ────────────────────────────────────────────────────────────
     "copyright":                "skip",
     "margin1":                  "skip",
     "margin2":                  "skip",
@@ -195,8 +197,9 @@ def char_is_italic(cr) -> bool:
 def extract_inline(para) -> str:
     """
     Extract text from a ParagraphStyleRange, applying bold/italic markers.
+
     Whitespace is trimmed from each run BEFORE markers are applied so it
-    sits outside them: "**word:**  rest" not "**word: ** rest"
+    sits outside them:  "**word:**  rest"  not  "**word: ** rest"
     """
     pieces = []
     for cr in para:
@@ -255,6 +258,22 @@ def parse_story(xml_bytes: bytes) -> list:
 def to_teachfloor_md(paragraphs: list) -> str:
     """
     Render (role, style, text) tuples → Teachfloor-writer Markdown.
+
+    Format recap:
+        ---
+        # Lesson title
+
+        # Element title
+        Body text...
+
+        > "Verbatim direct quote."
+
+        **Citation Name**
+        *Role, Organisation, Location*
+
+        ## Sub-heading
+        - Bullet item
+        1. Numbered item
     """
     lines: list[str] = []
     ol_n      = 0
@@ -265,170 +284,4 @@ def to_teachfloor_md(paragraphs: list) -> str:
     def flush_quotes():
         nonlocal quote_buf
         for q in quote_buf:
-            lines.append(f"> {q}")
-        quote_buf.clear()
-
-    for role, style, text in paragraphs:
-        if role != "ol":
-            ol_n = 0
-
-        if role not in ("quote", "citation_name", "citation_role"):
-            flush_quotes()
-
-        if role == "lesson_title":
-            if in_lesson:
-                lines.append("")
-            lines.append("---")
-            lines.append(f"# {text}")
-            in_lesson = True
-            prev_role = role
-            continue
-
-        if not in_lesson:
-            lines.append("---")
-            lines.append(f"# {text}")
-            in_lesson = True
-            prev_role = role
-            continue
-
-        if role == "element_title":
-            lines.append("")
-            lines.append(f"# {text}")
-
-        elif role == "h2":
-            lines.append("")
-            lines.append(f"## {text}")
-
-        elif role == "quote":
-            quote_buf.append(text)
-
-        elif role == "citation_name":
-            flush_quotes()
-            lines.append(f"**{text.replace('**', '').strip()}**")
-
-        elif role == "citation_role":
-            flush_quotes()
-            lines.append(f"*{text.replace('*', '').strip()}*")
-
-        elif role == "ul":
-            lines.append(f"- {text}")
-
-        elif role == "ol":
-            ol_n += 1
-            lines.append(f"{ol_n}. {text}")
-
-        else:
-            if prev_role == "body":
-                lines.append("")
-            lines.append(text)
-
-        prev_role = role
-
-    flush_quotes()
-    return "\n".join(lines).strip()
-
-
-# ============================================================
-# IDML FOLDER READER
-# ============================================================
-
-IDML_NS = "http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"
-
-
-def find_designmap(folder: Path) -> Path | None:
-    for candidate in sorted(folder.glob("designmap*.xml")):
-        return candidate
-    return None
-
-
-def get_story_order(designmap_path: Path) -> list[str]:
-    root = ET.fromstring(designmap_path.read_bytes())
-    story_list_str = root.attrib.get("StoryList", "")
-    if story_list_str:
-        return story_list_str.split()
-    ids = [
-        elem.get("src", "").split("/")[-1].replace("Story_", "").replace(".xml", "")
-        for elem in root.iter(f"{{{IDML_NS}}}Story")
-    ]
-    return list(reversed([i for i in ids if i]))
-
-
-def discover_stories(folder: Path) -> dict[str, Path]:
-    stories: dict[str, Path] = {}
-    for search_dir in [folder, folder / "Stories"]:
-        if not search_dir.is_dir():
-            continue
-        for fpath in search_dir.glob("Story_*.xml"):
-            stem   = fpath.stem
-            raw_id = stem.split("_", 1)[1]
-            sid    = raw_id.split("-")[0]
-            if sid not in stories or "-" not in stem:
-                stories[sid] = fpath
-    return stories
-
-
-def convert_folder(folder: Path, output_path: Path | None = None) -> str:
-    folder = folder.resolve()
-
-    designmap = find_designmap(folder)
-    if not designmap:
-        sys.exit(f"ERROR: No designmap*.xml found in {folder}")
-    print(f"  Designmap  : {designmap.name}")
-
-    story_order = get_story_order(designmap)
-    print(f"  StoryList  : {len(story_order)} story IDs")
-
-    available = discover_stories(folder)
-    print(f"  Story files: {len(available)} found")
-
-    def sort_key(sid: str) -> int:
-        try:
-            return story_order.index(sid)
-        except ValueError:
-            return len(story_order)
-
-    ordered = sorted(available.items(), key=lambda kv: sort_key(kv[0]))
-
-    all_paragraphs: list[tuple] = []
-    n_skipped = 0
-
-    for sid, fpath in ordered:
-        paras = parse_story(fpath.read_bytes())
-        if not paras:
-            n_skipped += 1
-            continue
-        all_paragraphs.extend(paras)
-
-    print(f"  Parsed     : {len(ordered) - n_skipped} stories with content "
-          f"({n_skipped} skipped as empty)")
-    print(f"  Paragraphs : {len(all_paragraphs)}")
-
-    md = to_teachfloor_md(all_paragraphs)
-
-    if output_path is None:
-        output_path = folder / "output.md"
-    output_path.write_text(md, encoding="utf-8")
-
-    lessons  = md.count("\n---\n") + (1 if md.startswith("---") else 0)
-    elements = md.count("\n# ")   + (1 if md.startswith("# ")  else 0)
-    print(f"  Output     : {output_path}  ({len(md):,} chars)")
-    print(f"  Lessons    : ~{lessons}    Elements: ~{elements}")
-
-    return md
-
-
-# ============================================================
-# CLI
-# ============================================================
-
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
-
-    folder = Path(sys.argv[1])
-    if not folder.is_dir():
-        sys.exit(f"ERROR: Not a directory: {folder}")
-
-    output = Path(sys.argv[2]) if len(sys.argv) >= 3 else None
-    convert_folder(folder, output)
+            lines.append(f": 
