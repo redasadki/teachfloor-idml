@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Output files
+output/
+*.md
+!README.md
+!INSTALL.md
+!CHANGELOG.md
+
+# IDML source files (may contain proprietary content)
+*.idml
+Story_*.xml
+designmap*.xml
+Styles.xml
+Spreads/
+Resources/
+
+# OS
+.DS_Store
+Thumbs.db
