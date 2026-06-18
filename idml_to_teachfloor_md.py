@@ -30,7 +30,7 @@ Config search order (without --config)
 See styles.toml for documentation of all settings and roles.
 """
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 
 import sys
 import argparse
@@ -650,8 +650,17 @@ def convert_folder(folder, output_path, config_path):
 
     md = to_teachfloor_md(all_paras)
 
+    # Resolve output path relative to the IDML folder, not CWD.
+    # A bare filename like "course.md" (no directory component) is anchored
+    # to the IDML folder. An explicit path that already includes a directory
+    # (absolute or relative) is used as-is.
     if output_path is None:
         output_path = folder / "output.md"
+    else:
+        output_path = Path(output_path)
+        if not output_path.parent.parts:   # bare filename, no directory given
+            output_path = folder / output_path
+
     Path(output_path).write_text(md, encoding="utf-8")
 
     lessons  = md.count("\n---\n") + (1 if md.startswith("---") else 0)
@@ -698,7 +707,7 @@ Examples:
         generate_toml(folder, toml_out, force=args.force)
     else:
         config_path = resolve_config_path(folder, args.config)
-        output      = Path(args.output) if args.output else None
+        output      = args.output   # pass raw string; convert_folder handles Path logic
         convert_folder(folder, output, config_path)
 
 
