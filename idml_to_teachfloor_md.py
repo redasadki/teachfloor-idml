@@ -20,31 +20,36 @@ Config search order (without --config)
   2. <script_dir>/styles.toml
   3. Built-in defaults
 
+Changes in v1.3.6
+-----------------
+  * Fix: _run_text() now iterates CSR children by index rather than
+    recursively, so it can look ahead when a HyperlinkTextSource display
+    text ends with "." or "/" (indicating InDesign truncated the URL at a
+    word-wrap point). If the immediately following sibling is a bare
+    <Content> node whose text contains no whitespace, that text is appended
+    to the display before emitting [display](url), and the sibling is
+    consumed so it is not emitted again as plain text.
+    Example: HLS content "https://doi.org/10.5281/zenodo." + Content
+    "15126588" -> display becomes "https://doi.org/10.5281/zenodo.15126588".
+
 Changes in v1.3.5
 -----------------
-  * Fix 1: parse_hyperlink_map() now percent-decodes URLs (InDesign stores
-    them as e.g. https%3a//...), strips InDesign duplicate-name suffixes
-    (" 1", " 2" etc.), and falls back to the Hyperlink Name attribute for
-    destinations of type="list" (used for simple URL/email hyperlinks that
-    have no shared URL-destination element). This covers the majority of
-    hyperlinks in practice.
-  * Fix 2: parse_story() collapses runs of 2+ consecutive hard-break
-    sequences ("  \\n") down to a single one, removing the spurious blank
-    lines that InDesign inserts around every hyperlink via extra <Br/> nodes.
-  * Fix 3: _merge_stray_fragments() joins any hard-break line consisting
-    solely of digits/punctuation onto the preceding content line, preventing
-    lone "." or DOI suffix fragments from appearing as separate lines.
+  * parse_hyperlink_map() percent-decodes URLs and falls back to the
+    Hyperlink Name attribute for type="list" destinations (covers most
+    simple URL/email hyperlinks).
+  * parse_story() collapses 2+ consecutive hard-breaks to one, removing
+    spurious blank lines InDesign inserts around every hyperlink.
+  * _merge_stray_fragments() joins bare punctuation/digit lines onto the
+    preceding content line.
 
 Changes in v1.3.4
 -----------------
-  * parse_hyperlink_map() introduced: reads <Hyperlink> entries from
-    designmap.xml and builds a {source_id -> url} lookup.
-  * _run_text() wraps <HyperlinkTextSource> content as [display](url).
-  * to_teachfloor_md() joins consecutive same-style body paragraphs that
-    end without sentence-closing punctuation (InDesign PSR splits at links).
+  * parse_hyperlink_map() introduced.
+  * _run_text() wraps HyperlinkTextSource content as [display](url).
+  * to_teachfloor_md() joins split PSRs at hyperlink boundaries.
 """
 
-__version__ = "1.3.5"
+__version__ = "1.3.6"
 
 import sys
 import re
@@ -444,61 +449,113 @@ def _has_font_keyword(cr, keywords):
     return _check(cr)
 
 
+def _collect_hls_text(node):
+    """Recursively collect display text from inside a HyperlinkTextSource."""
+    parts = []
+    for child in node:
+        if child.tag == "Content":
+            if child.text:
+                parts.append(child.text)
+            if child.tail:
+                parts.append(child.tail)
+        elif child.tag == "Br":
+            parts.append("\n")
+            if child.tail:
+                parts.append(child.tail)
+        elif child.tag != "CharacterStyleRange":
+            parts.extend(_collect_hls_text(child))
+            if child.tail:
+                parts.append(child.tail)
+    return parts
+
+
 def _run_text(cr, hyperlink_map):
     """Collect text from a CharacterStyleRange in document order.
 
-    <HyperlinkTextSource> nodes are wrapped as [display](url) using the
-    hyperlink_map.  If the source ID is not in the map (internal anchor,
-    cross-reference, etc.) the display text is emitted as plain text.
-    <Content> and <Br/> are handled as before; element.tail is always
-    appended after wrapper closing tags (v1.3.3 Fix 5).
+    Iterates children by index (not recursively) so that when a
+    HyperlinkTextSource is found, we can look ahead to the next sibling.
+    If the HLS display text ends with "." or "/" (InDesign truncated a URL
+    at a line-wrap point) and the immediately following sibling is a plain
+    <Content> node whose text has no whitespace, that text is appended to
+    the display and the sibling is consumed.
+
+    Example::
+
+        <HyperlinkTextSource>https://doi.org/10.5281/zenodo.</HyperlinkTextSource>
+        <Content>15126588</Content>
+
+    becomes ``[https://doi.org/10.5281/zenodo.15126588](url)``.
     """
     parts = []
+    children = list(cr)
+    i = 0
+    while i < len(children):
+        child = children[i]
+        tag = child.tag
 
-    def _walk(node):
-        for child in node:
-            if child.tag == "Content":
-                if child.text:
-                    parts.append(child.text)
-                if child.tail:
-                    parts.append(child.tail)
-            elif child.tag == "Br":
-                parts.append("\n")
-                if child.tail:
-                    parts.append(child.tail)
-            elif child.tag == "HyperlinkTextSource":
-                link_parts = []
-                def _collect(n):
-                    for c in n:
-                        if c.tag == "Content":
-                            if c.text:
-                                link_parts.append(c.text)
-                            if c.tail:
-                                link_parts.append(c.tail)
-                        elif c.tag == "Br":
-                            link_parts.append("\n")
-                            if c.tail:
-                                link_parts.append(c.tail)
-                        elif c.tag != "CharacterStyleRange":
-                            _collect(c)
-                            if c.tail:
-                                link_parts.append(c.tail)
-                _collect(child)
-                display = "".join(link_parts).strip()
-                source_id = child.get("Self", "").strip()
-                url = hyperlink_map.get(source_id, "")
-                if display and url:
-                    parts.append(f"[{display}]({url})")
-                elif display:
-                    parts.append(display)
-                if child.tail:
-                    parts.append(child.tail)
-            elif child.tag != "CharacterStyleRange":
-                _walk(child)
-                if child.tail:
-                    parts.append(child.tail)
+        if tag == "Properties":
+            i += 1
+            continue
 
-    _walk(cr)
+        if tag == "Content":
+            if child.text:
+                parts.append(child.text)
+            if child.tail:
+                parts.append(child.tail)
+            i += 1
+
+        elif tag == "Br":
+            parts.append("\n")
+            if child.tail:
+                parts.append(child.tail)
+            i += 1
+
+        elif tag == "HyperlinkTextSource":
+            link_parts = _collect_hls_text(child)
+            display = "".join(link_parts).strip()
+            source_id = child.get("Self", "").strip()
+            url = hyperlink_map.get(source_id, "")
+
+            # Look ahead: if display ends with "." or "/" it may be a URL
+            # truncated by InDesign at a line-wrap boundary.  Absorb the
+            # next sibling Content if it contains no whitespace.
+            if (display.startswith("http") and display[-1:] in (".", "/")
+                    and i + 1 < len(children)
+                    and children[i + 1].tag == "Content"):
+                next_text = (children[i + 1].text or "").strip()
+                if next_text and " " not in next_text:
+                    display = display + next_text
+                    i += 1  # consume the lookahead sibling
+
+            if display and url:
+                parts.append(f"[{display}]({url})")
+            elif display:
+                parts.append(display)
+            if child.tail:
+                parts.append(child.tail)
+            i += 1
+
+        elif tag == "CharacterStyleRange":
+            i += 1  # nested CSRs not expected here; skip
+
+        else:
+            # Generic wrapper element: recurse to collect Content/Br inside.
+            def _walk_generic(node):
+                for c in node:
+                    if c.tag == "Content":
+                        if c.text: parts.append(c.text)
+                        if c.tail: parts.append(c.tail)
+                    elif c.tag == "Br":
+                        parts.append("\n")
+                        if c.tail: parts.append(c.tail)
+                    elif c.tag != "CharacterStyleRange":
+                        _walk_generic(c)
+                        if c.tail: parts.append(c.tail)
+            _walk_generic(child)
+            if child.tail:
+                parts.append(child.tail)
+            i += 1
+
     return "".join(parts)
 
 
@@ -533,16 +590,12 @@ def make_inline_extractor(bold_keywords, italic_keywords, hyperlink_map):
 
 # Lines consisting only of digits and/or punctuation — these are stray
 # fragments that InDesign placed after a hyperlink in a separate run
-# (e.g. a DOI suffix "15126588" or a sentence-ending ".").
+# (e.g. a DOI suffix or a sentence-ending ".").
 _STRAY_FRAGMENT = re.compile(r'^[\d\s.,;:!?\u2019\u201c\u201d\u2014\u2013()\[\]]+$')
 
 
 def _merge_stray_fragments(text):
-    """Join bare punctuation/digit lines onto the preceding content line.
-
-    Input/output use "  \\n" as the hard-break separator (as produced by
-    parse_story after the newline-to-hard-break conversion).
-    """
+    """Join bare punctuation/digit lines onto the preceding content line."""
     raw_lines = text.split("  \n")
     merged = []
     for line in raw_lines:
@@ -568,10 +621,8 @@ def parse_story(xml_bytes, get_role, extract_inline):
         text = text.replace("\u2028", "\n").replace("\u2029", "\n")
         text = "\n".join(seg.strip() for seg in text.split("\n")).strip()
         text = text.replace("\n", "  \n")
-        # Collapse 2+ consecutive hard-breaks to one: InDesign wraps every
-        # hyperlink with extra <Br/> nodes that produce spurious blank lines.
+        # Collapse 2+ consecutive hard-breaks to one.
         text = re.sub(r"(  \n){2,}", "  \n", text).strip()
-        # Merge lone punctuation/digit fragments onto the preceding line.
         text = _merge_stray_fragments(text)
         if text and role != "skip":
             result.append((role, normalize_style(raw), text))
@@ -582,10 +633,6 @@ def parse_story(xml_bytes, get_role, extract_inline):
 # MARKDOWN RENDERER
 # ============================================================
 
-# Sentence-ending punctuation: a body paragraph that ends with one of these
-# is treated as a complete thought — the next same-style paragraph gets a
-# blank-line separator. Without these, InDesign likely split a single visual
-# line at a hyperlink boundary, so we join the fragments inline.
 _SENTENCE_END = re.compile(r'[.!?:)\]"\'\u00bb\u2014\u2013]\s*$')
 
 
@@ -652,11 +699,6 @@ def to_teachfloor_md(paragraphs):
             ol_n += 1
             lines.append(f"{ol_n}. {text.replace(chr(10), chr(10) + '   ')}")
         else:  # body
-            # InDesign splits a single visual paragraph into multiple
-            # ParagraphStyleRanges at hyperlink boundaries. Detect this by
-            # checking whether the previous body paragraph ended without
-            # sentence-closing punctuation AND shares the same style.
-            # If so, join inline with a space rather than a blank-line gap.
             if (prev_role == "body"
                     and prev_style == style
                     and lines
