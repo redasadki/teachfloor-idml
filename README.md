@@ -1,6 +1,6 @@
 # idml-to-teachfloor
 
-![Version](https://img.shields.io/badge/version-1.4.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.7-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -9,6 +9,8 @@ Convert an Adobe InDesign IDML file into Teachfloor-writer Markdown, ready for d
 ## What it does
 
 Reads all `Story_*.xml` files from an unpacked IDML folder, orders them using the `StoryList` attribute in `designmap.xml` (InDesign's canonical page order), maps paragraph styles to semantic roles (lesson title, element title, quote, bullet, etc.), and writes a single collated Markdown file structured for the Teachfloor course writer.
+
+Hyperlinks — including email addresses and full URLs such as DOIs — are converted to proper Markdown link syntax `[display](url)`, with the full URL reconstructed even when InDesign splits it across element boundaries.
 
 Style-to-role mappings live in an editable `styles.toml` file. A built-in `--init` command scans your IDML and generates that file for you — no manual XML inspection needed.
 
@@ -77,6 +79,7 @@ When no `--config` flag is given:
 | `*Role, Org, Country*` | Citation role |
 | `- item` | Bullet list |
 | `1. item` | Numbered list |
+| `[text](url)` | Hyperlink |
 | Plain paragraph | Body text |
 
 ## Roles reference
@@ -94,11 +97,17 @@ When no `--config` flag is given:
 | `body` | Plain paragraph |
 | `skip` | Omitted entirely |
 
+## Hyperlink handling
+
+The converter reads the `<Hyperlink>` map from `designmap.xml` and matches every `<HyperlinkTextSource>` in the story XML to its destination URL. Two quirks of InDesign are handled automatically:
+
+- **Percent-encoded URLs** — InDesign stores `https%3a//...`; the converter decodes these before writing Markdown.
+- **Truncated display text** — InDesign sometimes wraps only part of a URL inside the hyperlink element (e.g. `https://doi.org/10.5281/zenodo.`) and places the remainder (`15126588`) as a plain sibling. The converter detects this and reassembles the full display text.
+- **Spurious line breaks before links** — InDesign's XML indentation whitespace (element tails) is ignored; only genuine document line separators (`<Br/>` and `\u2028`) produce line breaks in the output.
+
 ## Handling pages with large headlines but no heading style
 
-Some InDesign layouts — particularly special pages with coloured backgrounds — use oversized body text to create a headline effect instead of applying a heading paragraph style. Without a style mapping these pages would collapse into the surrounding body text and would not be recognised as separate Teachfloor elements.
-
-Version 1.4.0 adds a **font-size heuristic** that promotes any `body` paragraph whose point size meets or exceeds a configurable threshold to `element_title`, starting a new content element automatically.
+Some InDesign layouts use oversized body text to create a headline effect instead of applying a heading paragraph style. Version 1.4.0 adds a **font-size heuristic** that promotes any `body` paragraph whose point size meets or exceeds a configurable threshold to `element_title`.
 
 The threshold is set in `styles.toml`:
 

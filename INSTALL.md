@@ -6,7 +6,7 @@
 
 ## What this script does
 
-It converts an Adobe InDesign publication file (`.idml`) into a Markdown file you can paste directly into [Teachfloor](https://www.teachfloor.com/)'s course writer — preserving lessons, headings, body text, quotes, bullet lists, and contributor attributions.
+It converts an Adobe InDesign publication file (`.idml`) into a Markdown file you can paste directly into [Teachfloor](https://www.teachfloor.com/)'s course writer — preserving lessons, headings, body text, quotes, bullet lists, contributor attributions, and **hyperlinks** (including email addresses and full DOI/URL links).
 
 ---
 
@@ -85,6 +85,7 @@ You will see:
 ```
   Config     : styles.toml (87 mappings, default_role='body')
   Designmap  : designmap.xml
+  Hyperlinks : 24 destinations indexed
   StoryList  : 210 story IDs
   Story files: 47 found
   Parsed     : 43 stories with content (4 skipped as empty)
@@ -127,6 +128,7 @@ python3 idml_to_teachfloor_md.py MyReport-IDML/ --init
 | `ERROR: No designmap*.xml found` | IDML not fully unpacked, or wrong folder |
 | All styles map to `body` | Run `--init` first |
 | `# TODO: verify` entries | Open `styles.toml` and set the correct role |
+| Hyperlinks show as plain text | Check `designmap.xml` contains `<Hyperlink>` entries |
 
 ---
 
@@ -134,7 +136,7 @@ python3 idml_to_teachfloor_md.py MyReport-IDML/ --init
 
 Check your version:
 ```python
-__version__ = "1.3.0"
+__version__ = "1.3.7"
 ```
 
 To update: download the ZIP again and replace `idml_to_teachfloor_md.py`. Your `styles.toml` is not affected.
