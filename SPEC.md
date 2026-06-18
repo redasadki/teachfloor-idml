@@ -177,9 +177,9 @@ contains a `<Story>` element. Text is organised as a hierarchy:
 |---|---|---|
 | `<Story>` | The text flow container | Root iterated via `root.iter("ParagraphStyleRange")` |
 | `<ParagraphStyleRange>` | A run of text sharing one paragraph style | One paragraph; mapped to a semantic role |
-| `<CharacterStyleRange>` | A run within a paragraph sharing one character style | Inline bold/italic detection |
+| `<CharacterStyleRange>` | A run within a paragraph sharing one character style | Inline bold/italic detection; `PointSize` inspection for headline heuristic |
 | `<Content>` | The literal text string | Concatenated to build paragraph text |
-| `<Br/>` | Forced line/paragraph break | (Not currently handled specially) |
+| `<Br/>` | Forced line/paragraph break | Converted to Markdown hard break (two trailing spaces + newline) |
 
 ### Key attributes
 
@@ -188,6 +188,7 @@ contains a `<Story>` element. Text is organised as a hierarchy:
 | `AppliedParagraphStyle` | `ParagraphStyleRange` | The paragraph style, e.g. `ParagraphStyle/$ID/Title 1`. The converter strips the `ParagraphStyle/` / `$ID/` prefix and lowercases it (`normalize_style()`), then maps it via `styles.toml`. |
 | `AppliedCharacterStyle` | `CharacterStyleRange` | The character style, e.g. `CharacterStyle/$ID/[No character style]`. Inspected for bold/italic keywords. |
 | `FontStyle` | `CharacterStyleRange` / `Properties` | Font weight/style name (e.g. `Bold`, `Italic`, `Semibold`). The converter scans this for bold/italic keywords defined in `styles.toml`. |
+| `PointSize` | `CharacterStyleRange` / `Properties/PointSize` | Font size in points. Read by `_paragraph_point_size()` for the headline promotion heuristic (v1.4.0). |
 
 > **Style name nomenclature**: paragraph/character style references take the
 > form `<Type>/<group?>/$ID/<name>` or `<Type>/<name>`. The `$ID/` segment
@@ -222,7 +223,71 @@ visual formatting.
 
 ---
 
-## 8. What the converter deliberately ignores
+## 8. Headline font-size heuristic (v1.4.0)
+
+Some InDesign layouts — particularly special pages with coloured backgrounds —
+use oversized body text to create large headlines instead of applying a heading
+paragraph style. Because the converter maps roles by paragraph style name, these
+pages were previously indistinguishable from ordinary body text and would not
+be recognised as separate Teachfloor content elements.
+
+### Problem
+
+A layout artist increases the `PointSize` on a `Normal` (body) paragraph to,
+say, 56 pt to achieve a large headline appearance. No heading paragraph style
+is applied, so `styles.toml` maps it to `body`. The paragraph flows into the
+surrounding text and no new element boundary is created in the Teachfloor
+output.
+
+### Solution
+
+Version 1.4.0 adds a size-based promotion step inside `parse_story()`:
+
+1. The paragraph style is resolved to a role as usual.
+2. If the resolved role is `body` and `headline_point_size > 0` (from
+   `styles.toml [settings]`), `_paragraph_point_size()` scans each
+   `CharacterStyleRange` for `PointSize` attributes — both inline on the
+   element and nested inside `<Properties><PointSize>` — and returns the
+   maximum.
+3. If the maximum point size is >= `headline_point_size`, the role is
+   overridden to `element_title`.
+
+### Attribute locations
+
+`PointSize` can appear in two places within a `CharacterStyleRange`:
+
+```xml
+<!-- Inline attribute -->
+<CharacterStyleRange PointSize="56" ...>
+  <Content>Large headline text</Content>
+</CharacterStyleRange>
+
+<!-- Nested Properties element -->
+<CharacterStyleRange ...>
+  <Properties>
+    <PointSize type="unit">56</PointSize>
+  </Properties>
+  <Content>Large headline text</Content>
+</CharacterStyleRange>
+```
+
+`_paragraph_point_size()` checks both locations and returns the maximum value
+found across all `CharacterStyleRange` children of the paragraph.
+
+### Configuration
+
+```toml
+[settings]
+headline_point_size = 40.0   # promote body >= 40 pt to element_title
+# headline_point_size = 0    # set to 0 to disable entirely
+```
+
+The default is `40.0` pt. Inspect the actual font sizes used for special pages
+in your document and adjust accordingly.
+
+---
+
+## 9. What the converter deliberately ignores
 
 | IDML feature | Location | Why ignored |
 |---|---|---|
@@ -235,7 +300,7 @@ visual formatting.
 
 ---
 
-## 9. Primary sources
+## 10. Primary sources
 
 This document is built only from official and authoritative references:
 
@@ -245,14 +310,3 @@ This document is built only from official and authoritative references:
 - **Adobe IDML packaging namespace** — `http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging`,
   as declared in `designmap.xml`.
 - **Adobe InDesign developer documentation** — https://www.adobe.com/devnet/indesign/idml.html
-
-Community/reference material consulted for the reading-order walk (cross-checked
-against, not substituted for, Adobe sources): the IDML cookbook and
-long-standing developer Q&A describing the `designmap → Spread → TextFrame →
-ParentStory` resolution.
-
-> **For maintainers**: when extending the converter (tables, footnotes,
-> threaded multi-frame stories, page-number markers), obtain the formal Adobe
-> IDML File Format Specification from the InDesign SDK and verify element and
-> attribute names against it before implementing. Do not infer schema details
-> from sample files alone.

@@ -5,6 +5,43 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.4.0] — 2026-06-18
+
+### Added
+- **Font-size heuristic** (`headline_point_size` setting) — body paragraphs
+  whose largest `PointSize` attribute meets or exceeds the configured threshold
+  are automatically promoted to `element_title`, starting a new Teachfloor
+  content element. This solves the problem of special pages (coloured
+  backgrounds, large display headlines) that were not being recognised as
+  separate elements because the layout artist sized up body text directly
+  instead of applying a heading paragraph style.
+- **`_paragraph_point_size()` helper** — scans all `CharacterStyleRange`
+  children of a paragraph for `PointSize` attributes (inline and inside
+  `<Properties>`), returns the maximum value found, or `0.0` if absent.
+- **`headline_point_size` key in `_DEFAULT_SETTINGS`** — default value `40.0`
+  pt. Set to `0` to disable the heuristic entirely.
+- **`headline_point_size` documented in `styles.toml`** — configuration
+  template updated with the new key and its rationale.
+- **`parse_story()` signature extended** — accepts `headline_point_size: float
+  = 0.0`; `convert_folder()` passes `settings.get("headline_point_size", 0.0)`
+  through to it on every story.
+
+### How it works
+
+For each `ParagraphStyleRange` in a story:
+1. The paragraph style name is resolved to a role via `styles.toml`.
+2. If the resolved role is `body` **and** `headline_point_size > 0`, the
+   paragraph's maximum point size is checked.
+3. If the point size is >= `headline_point_size`, the role is overridden to
+   `element_title`.
+4. All other paragraphs are unaffected.
+
+The heuristic fires only when the style map has already classified a paragraph
+as `body` (no heading style was applied). Paragraphs matched explicitly by
+a style-map rule are never touched.
+
+---
+
 ## [1.3.0] — 2026-06-18
 
 ### Added

@@ -48,6 +48,22 @@ bold_keywords = ["bold", "semibold", "extrabold", "black"]
 # Font-style keywords that trigger *italic* wrapping
 italic_keywords = ["italic", "oblique"]
 
+# Headline point-size heuristic (v1.4.0)
+# ─────────────────────────────────────
+# Some InDesign layouts use oversized body text instead of a heading paragraph
+# style to create large headlines — particularly on special pages with coloured
+# backgrounds. Without a style mapping these pages are indistinguishable from
+# ordinary body text and will not be recognised as separate Teachfloor elements.
+#
+# When headline_point_size > 0, any paragraph that resolves to "body" via the
+# style map but whose maximum CharacterStyleRange PointSize is >= this value
+# is automatically promoted to "element_title", starting a new content element.
+#
+# Recommended starting value: 40.0 pt (roughly H1 size in most T2R templates).
+# Inspect your IDML document to confirm actual font sizes used for these pages.
+# Set to 0 to disable the heuristic entirely.
+headline_point_size = 40.0
+
 
 # -----------------------------------------------------------------------------
 # [style_map]
@@ -74,27 +90,27 @@ italic_keywords = ["italic", "oblique"]
 "annex hpv"      = "element_title"
 "annex measles"  = "element_title"
 
-# -- Sub-headings (## Heading) ------------------------------------------------
-"title 3"            = "h2"
-"title 3 blue"       = "h2"
-"boxes title"        = "h2"
-"talking points 1"   = "h2"
-"conclusions title"  = "h2"
-"action plan title"  = "h2"
-"kf country blue"    = "h2"
-"kf country orange"  = "h2"
-"kf country green"   = "h2"
-"kf country purple"  = "h2"
-"kf country brown"   = "h2"
-"country contr"      = "h2"
+# -- Sub-headings (## Heading) -------------------------------------------------
+"title 3"           = "h2"
+"title 3 blue"      = "h2"
+"boxes title"       = "h2"
+"talking points 1"  = "h2"
+"conclusions title" = "h2"
+"action plan title" = "h2"
+"kf country blue"   = "h2"
+"kf country orange" = "h2"
+"kf country green"  = "h2"
+"kf country purple" = "h2"
+"kf country brown"  = "h2"
+"country contr"     = "h2"
 
-# -- Verbatim direct quotes (> blockquote) ------------------------------------
+# -- Quotes (> blockquote) ----------------------------------------------------
 "citations"        = "quote"
 "citations orange" = "quote"
 "comment02"        = "quote"
 "kf normal"        = "quote"
 
-# -- Citation name (**bold**) --------------------------------------------------
+# -- Citation name (**bold name**) --------------------------------------------
 "citation 2"        = "citation_name"
 "citation 2 orange" = "citation_name"
 "kf first"          = "citation_name"
@@ -102,55 +118,55 @@ italic_keywords = ["italic", "oblique"]
 "kfa name"          = "citation_name"
 "kfa name2"         = "citation_name"
 
-# -- Citation role (*italic*) --------------------------------------------------
-"kf ref blue"        = "citation_role"
-"kf ref orange"      = "citation_role"
-"kf ref green"       = "citation_role"
-"kf ref purple"      = "citation_role"
-"citations 3"        = "citation_role"
-"citations 3 orange" = "citation_role"
+# -- Citation role (*italic role/org/country*) ---------------------------------
+"kf ref blue"         = "citation_role"
+"kf ref orange"       = "citation_role"
+"kf ref green"        = "citation_role"
+"kf ref purple"       = "citation_role"
+"citations 3"         = "citation_role"
+"citations 3 orange"  = "citation_role"
 
-# -- Bullet lists --------------------------------------------------------------
-"bullet blue"             = "ul"
-"bullet brown"            = "ul"
-"bullet grey"             = "ul"
-"bullet brown 2"          = "ul"
-"bullet grey 2"           = "ul"
+# -- Bullet lists (- item) ----------------------------------------------------
+"bullet blue"           = "ul"
+"bullet brown"          = "ul"
+"bullet grey"           = "ul"
+"bullet brown 2"        = "ul"
+"bullet grey 2"         = "ul"
 "bullet blue ital bullet" = "ul"
-"bullet white text 2"     = "ul"
-"bullet whte text"        = "ul"
-"boxes bullet"            = "ul"
-"talking points 2"        = "ul"
-"talking points 3"        = "ul"
-"votes bullets"           = "ul"
-"kf bullets blue"         = "ul"
-"kf bullets orange"       = "ul"
-"kf bullets green"        = "ul"
-"kf bullets purple"       = "ul"
-"citation bullet"         = "ul"
+"bullet white text 2"   = "ul"
+"bullet whte text"      = "ul"
+"boxes bullet"          = "ul"
+"talking points 2"      = "ul"
+"talking points 3"      = "ul"
+"votes bullets"         = "ul"
+"kf bullets blue"       = "ul"
+"kf bullets orange"     = "ul"
+"kf bullets green"      = "ul"
+"kf bullets purple"     = "ul"
+"citation bullet"       = "ul"
 
-# -- Numbered lists ------------------------------------------------------------
+# -- Numbered lists (1. item) -------------------------------------------------
 "num" = "ol"
 
-# -- Body / editorial text -----------------------------------------------------
-"normal"              = "body"
-"normal shared"       = "body"
+# -- Body text ----------------------------------------------------------------
+"normal"             = "body"
+"normal shared"      = "body"
 "normal shared white" = "body"
-"questions"           = "body"
-"big story txt"       = "body"
-"bigstory end"        = "body"
-"blue centered"       = "body"
-"contributors"        = "body"
-"boxes"               = "body"
-"bo bolder"           = "body"
-"notes"               = "body"
-"action plans"        = "body"
-"conclusions"         = "body"
-"big story"           = "body"
-"executive quotes"    = "body"
-"chapo"               = "body"
+"questions"          = "body"
+"big story txt"      = "body"
+"bigstory end"       = "body"
+"blue centered"      = "body"
+"contributors"       = "body"
+"boxes"              = "body"
+"bo bolder"          = "body"
+"notes"              = "body"
+"action plans"       = "body"
+"conclusions"        = "body"
+"big story"          = "body"
+"executive quotes"   = "body"
+"chapo"              = "body"
 
-# -- Skip entirely (page furniture, TOC, copyright) ---------------------------
+# -- Omitted entirely ---------------------------------------------------------
 "copyright" = "skip"
 "margin1"   = "skip"
 "margin2"   = "skip"

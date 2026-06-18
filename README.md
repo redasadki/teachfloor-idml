@@ -1,6 +1,6 @@
 # idml-to-teachfloor
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Version](https://img.shields.io/badge/version-1.4.0-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -93,6 +93,21 @@ When no `--config` flag is given:
 | `ol` | Ordered list item |
 | `body` | Plain paragraph |
 | `skip` | Omitted entirely |
+
+## Handling pages with large headlines but no heading style
+
+Some InDesign layouts — particularly special pages with coloured backgrounds — use oversized body text to create a headline effect instead of applying a heading paragraph style. Without a style mapping these pages would collapse into the surrounding body text and would not be recognised as separate Teachfloor elements.
+
+Version 1.4.0 adds a **font-size heuristic** that promotes any `body` paragraph whose point size meets or exceeds a configurable threshold to `element_title`, starting a new content element automatically.
+
+The threshold is set in `styles.toml`:
+
+```toml
+[settings]
+headline_point_size = 40.0   # promote body text >= 40 pt to element_title
+```
+
+Set `headline_point_size = 0` to disable the heuristic entirely (default is `40.0`). The heuristic only promotes paragraphs that would otherwise resolve to `body`; any paragraph already matched by a style-map rule is unaffected.
 
 ## IDML folder layouts supported
 
