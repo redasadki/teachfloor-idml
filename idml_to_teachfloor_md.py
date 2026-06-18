@@ -30,7 +30,7 @@ Config search order (without --config)
 See styles.toml for documentation of all settings and roles.
 """
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 import sys
 import argparse
@@ -417,17 +417,34 @@ def _has_font_keyword(cr, keywords):
 
 
 def _run_text(cr):
-    """Concatenate Content text and convert <Br/> elements to newlines,
-    preserving document order within the CharacterStyleRange. This recovers
-    forced (soft) line breaks that InDesign stores as standalone <Br/> nodes
-    rather than as characters inside <Content>."""
+    """Collect text from a CharacterStyleRange in document order.
+
+    Handles three child node types:
+      <Content>   — literal text, appended directly.
+      <Br/>       — InDesign forced line break, converted to newline.
+      anything else (e.g. <HyperlinkTextSource>, <CrossReferenceSource>) —
+          wrapper elements whose Content/Br children are descended into
+          recursively, preserving document order.
+
+    A nested <CharacterStyleRange> is NOT descended into; it would be a
+    malformed file and descending would double-emit its text (the outer
+    loop in make_inline_extractor already visits every CSR independently).
+    """
     parts = []
-    for child in cr:
-        if child.tag == "Content":
-            if child.text:
-                parts.append(child.text)
-        elif child.tag == "Br":
-            parts.append("\n")
+
+    def _walk(node):
+        for child in node:
+            if child.tag == "Content":
+                if child.text:
+                    parts.append(child.text)
+            elif child.tag == "Br":
+                parts.append("\n")
+            elif child.tag != "CharacterStyleRange":
+                # Wrapper element (HyperlinkTextSource, CrossReferenceSource,
+                # XMLElement, etc.) — descend to collect its text children.
+                _walk(child)
+
+    _walk(cr)
     return "".join(parts)
 
 
