@@ -20,25 +20,28 @@ Config search order (without --config)
   2. <script_dir>/styles.toml
   3. Built-in defaults
 
+Changes in v1.3.7
+-----------------
+  * Fix: drop child.tail throughout _run_text and _collect_hls_text.
+    In IDML story XML every element tail is purely whitespace (newlines +
+    tabs used to indent the markup).  Appending these tails as text produced
+    a spurious \\n between each CharacterStyleRange, which after
+    normalization became an unwanted hard-break before every hyperlink
+    (e.g. the line break appearing before the email link in the Contact
+    paragraph).  Document line separators come only from <Br/> elements and
+    \\u2028 characters inside <Content> nodes.
+
 Changes in v1.3.6
 -----------------
-  * Fix: _run_text() now iterates CSR children by index rather than
-    recursively, so it can look ahead when a HyperlinkTextSource display
-    text ends with "." or "/" (indicating InDesign truncated the URL at a
-    word-wrap point). If the immediately following sibling is a bare
-    <Content> node whose text contains no whitespace, that text is appended
-    to the display before emitting [display](url), and the sibling is
-    consumed so it is not emitted again as plain text.
-    Example: HLS content "https://doi.org/10.5281/zenodo." + Content
-    "15126588" -> display becomes "https://doi.org/10.5281/zenodo.15126588".
+  * _run_text() iterates CSR children by index to look ahead and absorb a
+    trailing <Content> sibling when a HyperlinkTextSource display text ends
+    with "." or "/" (InDesign truncated a URL at a line-wrap point).
 
 Changes in v1.3.5
 -----------------
   * parse_hyperlink_map() percent-decodes URLs and falls back to the
-    Hyperlink Name attribute for type="list" destinations (covers most
-    simple URL/email hyperlinks).
-  * parse_story() collapses 2+ consecutive hard-breaks to one, removing
-    spurious blank lines InDesign inserts around every hyperlink.
+    Hyperlink Name attribute for type="list" destinations.
+  * parse_story() collapses 2+ consecutive hard-breaks to one.
   * _merge_stray_fragments() joins bare punctuation/digit lines onto the
     preceding content line.
 
@@ -49,7 +52,7 @@ Changes in v1.3.4
   * to_teachfloor_md() joins split PSRs at hyperlink boundaries.
 """
 
-__version__ = "1.3.6"
+__version__ = "1.3.7"
 
 import sys
 import re
@@ -450,22 +453,20 @@ def _has_font_keyword(cr, keywords):
 
 
 def _collect_hls_text(node):
-    """Recursively collect display text from inside a HyperlinkTextSource."""
+    """Recursively collect display text from inside a HyperlinkTextSource.
+
+    Note: child.tail is intentionally NOT collected — in IDML story XML
+    all element tails are XML indentation whitespace, not document content.
+    """
     parts = []
     for child in node:
         if child.tag == "Content":
             if child.text:
                 parts.append(child.text)
-            if child.tail:
-                parts.append(child.tail)
         elif child.tag == "Br":
             parts.append("\n")
-            if child.tail:
-                parts.append(child.tail)
         elif child.tag != "CharacterStyleRange":
             parts.extend(_collect_hls_text(child))
-            if child.tail:
-                parts.append(child.tail)
     return parts
 
 
@@ -474,17 +475,16 @@ def _run_text(cr, hyperlink_map):
 
     Iterates children by index (not recursively) so that when a
     HyperlinkTextSource is found, we can look ahead to the next sibling.
+
     If the HLS display text ends with "." or "/" (InDesign truncated a URL
     at a line-wrap point) and the immediately following sibling is a plain
     <Content> node whose text has no whitespace, that text is appended to
     the display and the sibling is consumed.
 
-    Example::
-
-        <HyperlinkTextSource>https://doi.org/10.5281/zenodo.</HyperlinkTextSource>
-        <Content>15126588</Content>
-
-    becomes ``[https://doi.org/10.5281/zenodo.15126588](url)``.
+    child.tail is intentionally NOT appended anywhere — in IDML story XML
+    all element tails are XML indentation whitespace (newlines + tabs), not
+    document content.  Document line separators come only from <Br/> elements
+    and \\u2028 characters inside <Content> nodes.
     """
     parts = []
     children = list(cr)
@@ -500,14 +500,10 @@ def _run_text(cr, hyperlink_map):
         if tag == "Content":
             if child.text:
                 parts.append(child.text)
-            if child.tail:
-                parts.append(child.tail)
             i += 1
 
         elif tag == "Br":
             parts.append("\n")
-            if child.tail:
-                parts.append(child.tail)
             i += 1
 
         elif tag == "HyperlinkTextSource":
@@ -531,29 +527,23 @@ def _run_text(cr, hyperlink_map):
                 parts.append(f"[{display}]({url})")
             elif display:
                 parts.append(display)
-            if child.tail:
-                parts.append(child.tail)
             i += 1
 
         elif tag == "CharacterStyleRange":
-            i += 1  # nested CSRs not expected here; skip
+            i += 1  # nested CSRs not expected at this level; skip
 
         else:
             # Generic wrapper element: recurse to collect Content/Br inside.
             def _walk_generic(node):
                 for c in node:
                     if c.tag == "Content":
-                        if c.text: parts.append(c.text)
-                        if c.tail: parts.append(c.tail)
+                        if c.text:
+                            parts.append(c.text)
                     elif c.tag == "Br":
                         parts.append("\n")
-                        if c.tail: parts.append(c.tail)
                     elif c.tag != "CharacterStyleRange":
                         _walk_generic(c)
-                        if c.tail: parts.append(c.tail)
             _walk_generic(child)
-            if child.tail:
-                parts.append(child.tail)
             i += 1
 
     return "".join(parts)
@@ -588,9 +578,8 @@ def make_inline_extractor(bold_keywords, italic_keywords, hyperlink_map):
     return extract_inline
 
 
-# Lines consisting only of digits and/or punctuation — these are stray
-# fragments that InDesign placed after a hyperlink in a separate run
-# (e.g. a DOI suffix or a sentence-ending ".").
+# Lines consisting only of digits and/or punctuation — stray fragments
+# InDesign places after a hyperlink in a separate run.
 _STRAY_FRAGMENT = re.compile(r'^[\d\s.,;:!?\u2019\u201c\u201d\u2014\u2013()\[\]]+$')
 
 
