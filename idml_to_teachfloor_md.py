@@ -416,7 +416,23 @@ def _has_font_keyword(cr, keywords):
     return False
 
 
+def _run_text(cr):
+    """Concatenate Content text and convert <Br/> elements to newlines,
+    preserving document order within the CharacterStyleRange. This recovers
+    forced (soft) line breaks that InDesign stores as standalone <Br/> nodes
+    rather than as characters inside <Content>."""
+    parts = []
+    for child in cr:
+        if child.tag == "Content":
+            if child.text:
+                parts.append(child.text)
+        elif child.tag == "Br":
+            parts.append("\n")
+    return "".join(parts)
+
+
 def make_inline_extractor(bold_keywords, italic_keywords):
+    """Return an inline-text extractor closed over font keyword lists."""
     def extract_inline(para):
         pieces = []
         for cr in para:
@@ -424,10 +440,7 @@ def make_inline_extractor(bold_keywords, italic_keywords):
                 continue
             bold   = _has_font_keyword(cr, bold_keywords)
             italic = _has_font_keyword(cr, italic_keywords)
-            run = "".join(
-                child.text for child in cr
-                if child.tag == "Content" and child.text
-            )
+            run = _run_text(cr)
             if not run:
                 continue
             core   = run.strip()
@@ -457,7 +470,15 @@ def parse_story(xml_bytes, get_role, extract_inline):
     for para in root.iter("ParagraphStyleRange"):
         raw  = para.get("AppliedParagraphStyle", "")
         role = get_role(raw)
-        text = extract_inline(para).strip()
+        text = extract_inline(para)
+        # Unicode LINE SEPARATOR (U+2028) and PARAGRAPH SEPARATOR (U+2029)
+        # are sometimes stored as literal characters inside <Content>; treat
+        # them as forced line breaks too.
+        text = text.replace("\u2028", "\n").replace("\u2029", "\n")
+        # Trim each broken segment, then re-emit internal breaks as Markdown
+        # hard breaks (two trailing spaces + newline) so they survive render.
+        text = "\n".join(seg.strip() for seg in text.split("\n")).strip()
+        text = text.replace("\n", "  \n")
         if text and role != "skip":
             result.append((role, normalize_style(raw), text))
     return result
@@ -476,7 +497,9 @@ def to_teachfloor_md(paragraphs):
 
     def flush_quotes():
         for q in quote_buf:
-            lines.append(f"> {q}")
+            # A quote may contain hard breaks ("  \n"); prefix each line.
+            for ln in q.split("\n"):
+                lines.append(f"> {ln.rstrip()}")
         quote_buf.clear()
 
     for role, _style, text in paragraphs:
@@ -516,11 +539,11 @@ def to_teachfloor_md(paragraphs):
             flush_quotes()
             lines.append(f"*{text.replace('*', '').strip()}*")
         elif role == "ul":
-            lines.append(f"- {text}")
+            lines.append(f"- {text.replace(chr(10), chr(10) + '  ')}")
         elif role == "ol":
             ol_n += 1
-            lines.append(f"{ol_n}. {text}")
-        else:
+            lines.append(f"{ol_n}. {text.replace(chr(10), chr(10) + '   ')}")
+        else:  # body
             if prev_role == "body":
                 lines.append("")
             lines.append(text)
