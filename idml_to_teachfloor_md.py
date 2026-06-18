@@ -4,48 +4,63 @@ idml_to_teachfloor_md.py
 ========================
 Converts an unpacked IDML folder to a single Teachfloor-writer Markdown file.
 
-Story reading order is determined by the `StoryList` attribute in the
-designmap XML (the InDesign canonical page order). Stories not present
-as files, or yielding no content after style filtering, are skipped.
+Usage
+-----
+  # Normal conversion (reads styles.toml from the IDML folder, then next to
+  # this script, then falls back to built-in defaults):
+  python3 idml_to_teachfloor_md.py <idml_folder> [output.md] [options]
 
-IDML folders are typically laid out as either:
-  <folder>/Story_*.xml          (flat, as exported by some tools)
-  <folder>/Stories/Story_*.xml  (standard IDML zip layout)
-Both layouts are supported.
+  # Bootstrap: scan the IDML and generate / merge a styles.toml:
+  python3 idml_to_teachfloor_md.py <idml_folder> --init [--config my.toml] [--force]
 
-Usage:
-    python3 idml_to_teachfloor_md.py <idml_folder> [output.md] [--config styles.toml]
+Options
+-------
+  --init          Scan the IDML folder and generate/merge a styles.toml.
+                  Does NOT produce a Markdown file.
+  --force         Used with --init: regenerate the TOML from scratch,
+                  overwriting any existing file.
+  --config FILE   Explicit TOML file path (overrides auto-search).
 
-    <idml_folder>   Directory containing Story XML files and a designmap*.xml
-    [output.md]     Output path (default: <idml_folder>/output.md)
-    --config FILE   Path to a TOML config file (default: styles.toml next to script)
+Config search order (without --config)
+---------------------------------------
+  1. <idml_folder>/styles.toml    per-project config
+  2. <script_dir>/styles.toml     shipped default / GLF-T2R reference
+  3. Built-in defaults            (no file; warning printed)
 
-Configuration:
-    All style mappings and conversion settings live in styles.toml.
-    The script reads styles.toml from the same directory as itself by default.
-    Use --config to point at a different file (e.g. per-project configs).
-    If no config file is found, built-in defaults are used with a warning.
-
-    See styles.toml for full documentation of all settings.
+See styles.toml for documentation of all settings and roles.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 import sys
 import argparse
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from datetime import date
 
 # ---------------------------------------------------------------------------
-# TOML loading — stdlib tomllib (Python 3.11+) or tomli backport (3.9/3.10)
+# TOML – stdlib tomllib (Python 3.11+) or tomli backport (3.9 / 3.10)
 # ---------------------------------------------------------------------------
 try:
-    import tomllib          # Python 3.11+
+    import tomllib
 except ImportError:
     try:
-        import tomli as tomllib  # pip install tomli
+        import tomli as tomllib   # pip install tomli
     except ImportError:
         tomllib = None
+
+
+# ============================================================
+# CONSTANTS
+# ============================================================
+
+VALID_ROLES = frozenset({
+    "lesson_title", "element_title", "h2",
+    "quote", "citation_name", "citation_role",
+    "ul", "ol", "body", "skip",
+})
+
+IDML_NS = "http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"
 
 
 # ============================================================
@@ -102,32 +117,87 @@ _DEFAULT_STYLE_MAP = {
     "tdm 1": "skip", "tdm 2": "skip", "header": "skip",
 }
 
-VALID_ROLES = frozenset({
-    "lesson_title", "element_title", "h2",
-    "quote", "citation_name", "citation_role",
-    "ul", "ol", "body", "skip",
-})
+
+# ============================================================
+# HEURISTIC ROLE GUESSER
+# ============================================================
+
+# Ordered rules: first match wins.
+# Each entry: (substring_in_style_name, role, confident)
+_HEURISTIC_RULES = [
+    ("copyright",   "skip",          True),
+    ("margin",      "skip",          True),
+    ("header",      "skip",          True),
+    ("footer",      "skip",          True),
+    ("toc",         "skip",          True),
+    ("tdm",         "skip",          True),
+    ("cover",       "lesson_title",  True),
+    ("title 1",     "lesson_title",  True),
+    ("title 2",     "element_title", True),
+    ("title 3",     "h2",            True),
+    ("title box",   "element_title", True),
+    ("bullet",      "ul",            True),
+    ("num",         "ol",            True),
+    ("citation 2",  "citation_name", True),
+    ("citation 3",  "citation_role", True),
+    ("citations 3", "citation_role", True),
+    ("citations",   "quote",         True),
+    ("citation",    "citation_name", False),
+    ("title",       "lesson_title",  False),
+    ("heading",     "h2",            False),
+    ("subhead",     "h2",            False),
+    ("quote",       "quote",         False),
+    ("normal",      "body",          True),
+    ("body",        "body",          True),
+    ("paragraph",   "body",          False),
+    ("text",        "body",          False),
+    ("annex",       "element_title", False),
+]
+
+
+def _guess_role(style_name):
+    """
+    Return (role, confident) for a style name not in styles.toml.
+    confident=True  -> no TODO comment in generated TOML
+    confident=False -> adds '# TODO: verify' comment
+    """
+    s = style_name.lower()
+    for fragment, role, confident in _HEURISTIC_RULES:
+        if fragment in s:
+            return role, confident
+    return "body", False
 
 
 # ============================================================
 # CONFIG LOADER
 # ============================================================
 
-def load_config(config_path: Path) -> tuple[dict, dict]:
+def resolve_config_path(idml_folder, explicit):
     """
-    Load styles.toml and return (settings, style_map).
-    Falls back to built-in defaults if the file is missing or TOML unavailable.
-    Validates roles and warns on unknown values.
+    Config search order:
+      1. --config flag (explicit path)
+      2. <idml_folder>/styles.toml
+      3. <script_dir>/styles.toml
     """
+    if explicit:
+        return Path(explicit)
+    per_project = idml_folder.resolve() / "styles.toml"
+    if per_project.exists():
+        return per_project
+    return Path(__file__).parent / "styles.toml"
+
+
+def load_config(config_path):
+    """Load TOML config; return (settings, style_map)."""
     if not config_path.exists():
-        print(f"  [INFO] No config file at {config_path} — using built-in defaults.",
+        print(f"  [INFO] No config at {config_path} — using built-in defaults.",
               file=sys.stderr)
         return _DEFAULT_SETTINGS.copy(), _DEFAULT_STYLE_MAP.copy()
 
     if tomllib is None:
         print(
             "  [WARN] TOML support unavailable.\n"
-            "         Python 3.11+ includes tomllib automatically.\n"
+            "         Python 3.11+ includes it automatically.\n"
             "         For Python 3.9/3.10: pip install tomli\n"
             "         Falling back to built-in defaults.",
             file=sys.stderr,
@@ -135,42 +205,196 @@ def load_config(config_path: Path) -> tuple[dict, dict]:
         return _DEFAULT_SETTINGS.copy(), _DEFAULT_STYLE_MAP.copy()
 
     try:
-        with open(config_path, "rb") as f:
-            data = tomllib.load(f)
-    except Exception as e:
-        sys.exit(f"ERROR: Could not read config file {config_path}: {e}")
+        with open(config_path, "rb") as fh:
+            data = tomllib.load(fh)
+    except Exception as exc:
+        sys.exit(f"ERROR: Cannot read {config_path}: {exc}")
 
-    settings = {**_DEFAULT_SETTINGS, **data.get("settings", {})}
-
+    settings  = {**_DEFAULT_SETTINGS, **data.get("settings", {})}
     raw_map   = data.get("style_map", {})
     style_map = {}
     for style, role in raw_map.items():
-        style_lower = style.lower().strip()
-        role_lower  = role.lower().strip()
-        if role_lower not in VALID_ROLES:
+        sl = style.lower().strip()
+        rl = role.lower().strip()
+        if rl not in VALID_ROLES:
             print(f"  [WARN] Unknown role '{role}' for style '{style}' — skipping.",
                   file=sys.stderr)
             continue
-        style_map[style_lower] = role_lower
+        style_map[sl] = rl
 
     print(f"  Config     : {config_path.name} "
-          f"({len(style_map)} style mappings, "
-          f"default_role='{settings['default_role']}')")
+          f"({len(style_map)} mappings, default_role='{settings['default_role']}')"
+    )
     return settings, style_map
+
+
+# ============================================================
+# INIT: discover styles & generate / merge styles.toml
+# ============================================================
+
+def discover_all_styles(folder):
+    """Return sorted list of unique normalised paragraph styles in this IDML."""
+    styles = set()
+    for search_dir in [folder, folder / "Stories"]:
+        if not search_dir.is_dir():
+            continue
+        for fpath in search_dir.glob("Story_*.xml"):
+            try:
+                root = ET.fromstring(fpath.read_bytes())
+            except ET.ParseError:
+                continue
+            for para in root.iter("ParagraphStyleRange"):
+                raw = para.get("AppliedParagraphStyle", "")
+                if raw:
+                    styles.add(normalize_style(raw))
+    return sorted(styles)
+
+
+def _load_existing_toml_map(path):
+    if not path.exists() or tomllib is None:
+        return {}
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+        return {k.lower().strip(): v for k, v in data.get("style_map", {}).items()}
+    except Exception:
+        return {}
+
+
+def generate_toml(folder, output_path, force=False):
+    """
+    Scan the IDML folder, apply heuristics, write (or merge into) styles.toml.
+    """
+    folder = folder.resolve()
+    print(f"\n  Scanning IDML stories in {folder} ...")
+
+    all_styles = discover_all_styles(folder)
+    if not all_styles:
+        sys.exit("ERROR: No paragraph styles found — is this a valid unpacked IDML folder?")
+
+    print(f"  Found {len(all_styles)} unique paragraph styles.")
+
+    existing   = {} if force else _load_existing_toml_map(output_path)
+    new_styles  = [s for s in all_styles if s not in existing]
+    kept_styles = [s for s in all_styles if s in existing]
+    print(f"  Already mapped : {len(kept_styles)}")
+    print(f"  New styles     : {len(new_styles)}")
+
+    grouped   = {}
+    uncertain = []
+    for style in new_styles:
+        role, confident = _guess_role(style)
+        grouped.setdefault(role, []).append((style, confident))
+        if not confident:
+            uncertain.append(style)
+
+    confident_count = len(new_styles) - len(uncertain)
+    pct = int(100 * confident_count / len(new_styles)) if new_styles else 100
+
+    role_order = [
+        "lesson_title", "element_title", "h2",
+        "quote", "citation_name", "citation_role",
+        "ul", "ol", "body", "skip",
+    ]
+    role_labels = {
+        "lesson_title":   "Lesson titles (--- + # Title)",
+        "element_title":  "Element titles (# Title)",
+        "h2":             "Sub-headings (## Heading)",
+        "quote":          "Verbatim direct quotes (> blockquote)",
+        "citation_name":  "Citation name (**bold**)",
+        "citation_role":  "Citation role (*italic*)",
+        "ul":             "Bullet lists",
+        "ol":             "Numbered lists",
+        "body":           "Body / editorial text",
+        "skip":           "Skip entirely (page furniture, TOC, copyright)",
+    }
+
+    lines = []
+
+    if force or not output_path.exists():
+        lines += [
+            "# =============================================================================",
+            "# styles.toml — idml-to-teachfloor configuration",
+            "# =============================================================================",
+            f"# Generated by idml_to_teachfloor_md.py v{__version__}",
+            f"# Date        : {date.today().isoformat()}",
+            f"# Styles      : {len(all_styles)} total",
+            f"# Auto-mapped : {confident_count} / {len(new_styles)} new styles ({pct}% confident)",
+        ]
+        if uncertain:
+            lines.append(f"# Review      : {len(uncertain)} entries marked '# TODO: verify'")
+        lines += [
+            "#",
+            "# Edit this file to correct any mappings, then re-run the converter.",
+            "# =============================================================================",
+            "", "",
+            "[settings]", "",
+            "# Role for any style NOT in [style_map]: \"body\" (safe) or \"skip\" (discard)",
+            'default_role = "body"', "",
+            'bold_keywords   = ["bold", "semibold", "extrabold", "black"]',
+            'italic_keywords = ["italic", "oblique"]',
+            "", "",
+            "# -----------------------------------------------------------------------------",
+            "# [style_map]  InDesign paragraph style -> Teachfloor role",
+            "# -----------------------------------------------------------------------------",
+            "# Roles: lesson_title  element_title  h2  quote  citation_name",
+            "#        citation_role  ul  ol  body  skip",
+            "# -----------------------------------------------------------------------------",
+            "[style_map]", "",
+        ]
+        for role in role_order:
+            entries = grouped.get(role, [])
+            if not entries:
+                continue
+            label = role_labels[role]
+            lines.append(f"# -- {label} " + "-" * max(0, 60 - len(label)))
+            for style, confident in sorted(entries):
+                todo = "" if confident else "  # TODO: verify"
+                lines.append(f'"{style}" = "{role}"{todo}')
+            lines.append("")
+    else:
+        existing_text = output_path.read_text(encoding="utf-8").rstrip()
+        lines.append(existing_text)
+        lines += [
+            "", "",
+            "# " + "-" * 78,
+            f"# NEW STYLES discovered on {date.today().isoformat()}",
+            f"# {len(new_styles)} new style(s) added  ({pct}% auto-mapped with confidence)",
+        ]
+        if uncertain:
+            lines.append(f"# Review lines marked '# TODO: verify'.")
+        lines.append("# " + "-" * 78)
+        lines.append("")
+        for role in role_order:
+            entries = grouped.get(role, [])
+            if not entries:
+                continue
+            lines.append(f"# -- {role} (new)")
+            for style, confident in sorted(entries):
+                todo = "" if confident else "  # TODO: verify"
+                lines.append(f'"{style}" = "{role}"{todo}')
+            lines.append("")
+
+    toml_text = "\n".join(lines).rstrip() + "\n"
+    output_path.write_text(toml_text, encoding="utf-8")
+
+    print(f"\n  -> {output_path}")
+    print(f"  {len(new_styles)} new style(s) written. {len(uncertain)} marked TODO: verify.\n")
+    print("  Next steps:")
+    print(f"  1. Open {output_path.name} and review lines marked 'TODO: verify'")
+    print(f"  2. python3 idml_to_teachfloor_md.py {folder.name}/ output.md --config {output_path}")
 
 
 # ============================================================
 # XML PARSING
 # ============================================================
 
-def normalize_style(raw: str) -> str:
-    """Strip IDML path prefix and normalize to lowercase."""
+def normalize_style(raw):
     return raw.split("/")[-1].replace("$ID/", "").strip().lower()
 
 
-def make_get_role(style_map: dict, default_role: str):
-    """Return a role-resolver closed over the loaded style_map."""
-    def get_role(raw: str) -> str:
+def make_get_role(style_map, default_role):
+    def get_role(raw):
         norm = normalize_style(raw)
         if norm in style_map:
             return style_map[norm]
@@ -181,7 +405,7 @@ def make_get_role(style_map: dict, default_role: str):
     return get_role
 
 
-def _has_font_keyword(cr, keywords: list) -> bool:
+def _has_font_keyword(cr, keywords):
     for attr in ("FontStyle", "AppliedCharacterStyle"):
         if any(k in cr.get(attr, "").lower() for k in keywords):
             return True
@@ -192,9 +416,8 @@ def _has_font_keyword(cr, keywords: list) -> bool:
     return False
 
 
-def make_inline_extractor(bold_keywords: list, italic_keywords: list):
-    """Return an inline-text extractor closed over font keyword lists."""
-    def extract_inline(para) -> str:
+def make_inline_extractor(bold_keywords, italic_keywords):
+    def extract_inline(para):
         pieces = []
         for cr in para:
             if cr.tag != "CharacterStyleRange":
@@ -224,12 +447,11 @@ def make_inline_extractor(bold_keywords: list, italic_keywords: list):
     return extract_inline
 
 
-def parse_story(xml_bytes: bytes, get_role, extract_inline) -> list:
-    """Parse an IDML Story XML → list of (role, style_name, text)."""
+def parse_story(xml_bytes, get_role, extract_inline):
     try:
         root = ET.fromstring(xml_bytes)
-    except ET.ParseError as e:
-        print(f"  [WARN] XML parse error: {e}", file=sys.stderr)
+    except ET.ParseError as exc:
+        print(f"  [WARN] XML parse error: {exc}", file=sys.stderr)
         return []
     result = []
     for para in root.iter("ParagraphStyleRange"):
@@ -245,10 +467,7 @@ def parse_story(xml_bytes: bytes, get_role, extract_inline) -> list:
 # MARKDOWN RENDERER
 # ============================================================
 
-def to_teachfloor_md(paragraphs: list) -> str:
-    """
-    Render (role, style, text) tuples → Teachfloor-writer Markdown.
-    """
+def to_teachfloor_md(paragraphs):
     lines      = []
     ol_n       = 0
     prev_role  = None
@@ -256,12 +475,11 @@ def to_teachfloor_md(paragraphs: list) -> str:
     quote_buf  = []
 
     def flush_quotes():
-        nonlocal quote_buf
         for q in quote_buf:
             lines.append(f"> {q}")
         quote_buf.clear()
 
-    for role, style, text in paragraphs:
+    for role, _style, text in paragraphs:
         if role != "ol":
             ol_n = 0
         if role not in ("quote", "citation_name", "citation_role"):
@@ -302,7 +520,7 @@ def to_teachfloor_md(paragraphs: list) -> str:
         elif role == "ol":
             ol_n += 1
             lines.append(f"{ol_n}. {text}")
-        else:  # body
+        else:
             if prev_role == "body":
                 lines.append("")
             lines.append(text)
@@ -317,16 +535,13 @@ def to_teachfloor_md(paragraphs: list) -> str:
 # IDML FOLDER READER
 # ============================================================
 
-IDML_NS = "http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"
-
-
-def find_designmap(folder: Path) -> Path | None:
+def find_designmap(folder):
     for candidate in sorted(folder.glob("designmap*.xml")):
         return candidate
     return None
 
 
-def get_story_order(designmap_path: Path) -> list[str]:
+def get_story_order(designmap_path):
     root = ET.fromstring(designmap_path.read_bytes())
     story_list_str = root.attrib.get("StoryList", "")
     if story_list_str:
@@ -338,8 +553,8 @@ def get_story_order(designmap_path: Path) -> list[str]:
     return list(reversed([i for i in ids if i]))
 
 
-def discover_stories(folder: Path) -> dict[str, Path]:
-    stories: dict[str, Path] = {}
+def discover_stories(folder):
+    stories = {}
     for search_dir in [folder, folder / "Stories"]:
         if not search_dir.is_dir():
             continue
@@ -352,7 +567,7 @@ def discover_stories(folder: Path) -> dict[str, Path]:
     return stories
 
 
-def convert_folder(folder: Path, output_path: Path | None, config_path: Path) -> str:
+def convert_folder(folder, output_path, config_path):
     folder = folder.resolve()
 
     settings, style_map = load_config(config_path)
@@ -397,7 +612,7 @@ def convert_folder(folder: Path, output_path: Path | None, config_path: Path) ->
 
     if output_path is None:
         output_path = folder / "output.md"
-    output_path.write_text(md, encoding="utf-8")
+    Path(output_path).write_text(md, encoding="utf-8")
 
     lessons  = md.count("\n---\n") + (1 if md.startswith("---") else 0)
     elements = md.count("\n# ")    + (1 if md.startswith("# ")  else 0)
@@ -416,27 +631,35 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 idml_to_teachfloor_md.py MyReport-IDML/
+  python3 idml_to_teachfloor_md.py MyReport-IDML/ --init
+  python3 idml_to_teachfloor_md.py MyReport-IDML/ --init --config t2r12.toml
+  python3 idml_to_teachfloor_md.py MyReport-IDML/ --init --force
   python3 idml_to_teachfloor_md.py MyReport-IDML/ course.md
-  python3 idml_to_teachfloor_md.py MyReport-IDML/ course.md --config t2r11.toml
+  python3 idml_to_teachfloor_md.py MyReport-IDML/ course.md --config t2r12.toml
 """,
     )
     parser.add_argument("idml_folder", help="Path to the unpacked IDML folder")
     parser.add_argument("output", nargs="?", default=None,
-                        help="Output Markdown file (default: <idml_folder>/output.md)")
+                        help="Output Markdown file. Ignored when --init is used.")
+    parser.add_argument("--init", action="store_true",
+                        help="Generate/merge styles.toml. Does not convert.")
+    parser.add_argument("--force", action="store_true",
+                        help="With --init: overwrite existing styles.toml completely.")
     parser.add_argument("--config", default=None,
-                        help="Path to TOML config file "
-                             "(default: styles.toml next to this script)")
+                        help="Explicit TOML path. With --init: write generated TOML here.")
     args = parser.parse_args()
 
     folder = Path(args.idml_folder)
     if not folder.is_dir():
         sys.exit(f"ERROR: Not a directory: {folder}")
 
-    output      = Path(args.output) if args.output else None
-    config_path = Path(args.config) if args.config else Path(__file__).parent / "styles.toml"
-
-    convert_folder(folder, output, config_path)
+    if args.init:
+        toml_out = Path(args.config) if args.config else folder.resolve() / "styles.toml"
+        generate_toml(folder, toml_out, force=args.force)
+    else:
+        config_path = resolve_config_path(folder, args.config)
+        output      = Path(args.output) if args.output else None
+        convert_folder(folder, output, config_path)
 
 
 if __name__ == "__main__":

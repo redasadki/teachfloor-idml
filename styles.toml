@@ -1,56 +1,60 @@
 # =============================================================================
 # styles.toml — idml-to-teachfloor configuration
 # =============================================================================
-# Edit this file to adapt the converter to a different InDesign template.
-# The script (idml_to_teachfloor_md.py) never needs to be modified.
+# This is the shipped GLF / Teach-to-Reach reference configuration.
+# It documents all InDesign paragraph styles used in the T2R report template
+# and maps each one to a Teachfloor Markdown role.
 #
-# Pass a custom config file with:
-#   python3 idml_to_teachfloor_md.py MyReport-IDML/ out.md --config my.toml
+# HOW TO USE FOR A NEW DOCUMENT
+# ─────────────────────────────
+# Run --init to auto-generate a styles.toml tailored to your IDML package:
+#
+#   python3 idml_to_teachfloor_md.py MyReport-IDML/ --init
+#
+# That command will:
+#   1. Scan your IDML for every paragraph style actually used
+#   2. Pre-fill known styles from this file (so T2R documents work instantly)
+#   3. Apply name heuristics to guess roles for any new styles
+#   4. Mark uncertain entries with  # TODO: verify
+#
+# Edit the generated file, then run the converter normally.
+#
+# ROLES REFERENCE
+# ───────────────
+#   lesson_title   ->  --- \n # Title     (starts a new Lesson)
+#   element_title  ->  # Title             (starts a new Content Element)
+#   h2             ->  ## Heading
+#   quote          ->  > blockquote
+#   citation_name  ->  **bold name**
+#   citation_role  ->  *italic role/org/country*
+#   ul             ->  - bullet
+#   ol             ->  1. numbered
+#   body           ->  plain paragraph
+#   skip           ->  omitted entirely
 # =============================================================================
 
 
 # -----------------------------------------------------------------------------
-# [settings] — general conversion behaviour
+# [settings]
 # -----------------------------------------------------------------------------
 [settings]
 
-# Role assigned to any paragraph style not listed in [style_map] below.
-# Options: "body" | "skip"
-# "body"  — unmapped styles are included as plain text (safe default)
-# "skip"  — unmapped styles are silently dropped
+# Role for any style NOT found in [style_map]: "body" (safe) or "skip"
 default_role = "body"
 
-# FontStyle substrings that mean BOLD.
-# Add entries if your font family uses unusual weight names.
+# Font-weight keywords that trigger **bold** wrapping
 bold_keywords = ["bold", "semibold", "extrabold", "black"]
 
-# FontStyle substrings that mean ITALIC.
+# Font-style keywords that trigger *italic* wrapping
 italic_keywords = ["italic", "oblique"]
 
 
 # -----------------------------------------------------------------------------
-# [style_map] — InDesign paragraph style → Teachfloor semantic role
-# -----------------------------------------------------------------------------
-# Keys   : InDesign paragraph style names, case-insensitive.
-#          The "ParagraphStyle/" path prefix is stripped automatically.
-# Values : one of the roles listed below.
-#
-# Roles
-# ─────
-#   lesson_title   →  ---\n# Title    New Teachfloor lesson (module break)
-#   element_title  →  # Title           New content element within a lesson
-#   h2             →  ## Heading        Sub-heading
-#   quote          →  > text            Verbatim direct quote / testimonial
-#   citation_name  →  **Name**          Bold attribution after a quote
-#   citation_role  →  *Role, Org*       Italic role line after citation name
-#   ul             →  - item            Bullet list item
-#   ol             →  1. item           Numbered list item
-#   body           →  plain paragraph   Body / editorial text
-#   skip           →  (omitted)         Dropped entirely (headers, TOC, etc.)
+# [style_map]
 # -----------------------------------------------------------------------------
 [style_map]
 
-# ── Lesson titles ─────────────────────────────────────────────────────────────
+# -- Lesson titles (--- + # Title) --------------------------------------------
 "title 1"           = "lesson_title"
 "title 1 blue"      = "lesson_title"
 "title 1 grey"      = "lesson_title"
@@ -61,7 +65,7 @@ italic_keywords = ["italic", "oblique"]
 "title 1 green"     = "lesson_title"
 "cover"             = "lesson_title"
 
-# ── Element titles ────────────────────────────────────────────────────────────
+# -- Element titles (# Title) -------------------------------------------------
 "title 2 blue"   = "element_title"
 "title 2 white"  = "element_title"
 "title 2 brown"  = "element_title"
@@ -70,31 +74,27 @@ italic_keywords = ["italic", "oblique"]
 "annex hpv"      = "element_title"
 "annex measles"  = "element_title"
 
-# ── Sub-headings ──────────────────────────────────────────────────────────────
-"title 3"           = "h2"
-"title 3 blue"      = "h2"
-"boxes title"       = "h2"
-"talking points 1"  = "h2"
-"conclusions title" = "h2"
-"action plan title" = "h2"
-"kf country blue"   = "h2"
-"kf country orange" = "h2"
-"kf country green"  = "h2"
-"kf country purple" = "h2"
-"kf country brown"  = "h2"
-"country contr"     = "h2"
+# -- Sub-headings (## Heading) ------------------------------------------------
+"title 3"            = "h2"
+"title 3 blue"       = "h2"
+"boxes title"        = "h2"
+"talking points 1"   = "h2"
+"conclusions title"  = "h2"
+"action plan title"  = "h2"
+"kf country blue"    = "h2"
+"kf country orange"  = "h2"
+"kf country green"   = "h2"
+"kf country purple"  = "h2"
+"kf country brown"   = "h2"
+"country contr"      = "h2"
 
-# ── Verbatim direct quotes ───────────────────────────────────────────────────────
+# -- Verbatim direct quotes (> blockquote) ------------------------------------
 "citations"        = "quote"
 "citations orange" = "quote"
 "comment02"        = "quote"
 "kf normal"        = "quote"
 
-# ── Editorial / intro paragraphs (NOT first-person quotes) ─────────────────────
-"executive quotes" = "body"
-"chapo"            = "body"
-
-# ── Citation name (bold attribution after a quote) ───────────────────────────
+# -- Citation name (**bold**) --------------------------------------------------
 "citation 2"        = "citation_name"
 "citation 2 orange" = "citation_name"
 "kf first"          = "citation_name"
@@ -102,7 +102,7 @@ italic_keywords = ["italic", "oblique"]
 "kfa name"          = "citation_name"
 "kfa name2"         = "citation_name"
 
-# ── Citation role (italic attribution after name) ────────────────────────────
+# -- Citation role (*italic*) --------------------------------------------------
 "kf ref blue"        = "citation_role"
 "kf ref orange"      = "citation_role"
 "kf ref green"       = "citation_role"
@@ -110,7 +110,7 @@ italic_keywords = ["italic", "oblique"]
 "citations 3"        = "citation_role"
 "citations 3 orange" = "citation_role"
 
-# ── Bullet lists ────────────────────────────────────────────────────────────────
+# -- Bullet lists --------------------------------------------------------------
 "bullet blue"             = "ul"
 "bullet brown"            = "ul"
 "bullet grey"             = "ul"
@@ -129,10 +129,10 @@ italic_keywords = ["italic", "oblique"]
 "kf bullets purple"       = "ul"
 "citation bullet"         = "ul"
 
-# ── Numbered lists ──────────────────────────────────────────────────────────────
+# -- Numbered lists ------------------------------------------------------------
 "num" = "ol"
 
-# ── Body text ───────────────────────────────────────────────────────────────────
+# -- Body / editorial text -----------------------------------------------------
 "normal"              = "body"
 "normal shared"       = "body"
 "normal shared white" = "body"
@@ -147,8 +147,10 @@ italic_keywords = ["italic", "oblique"]
 "action plans"        = "body"
 "conclusions"         = "body"
 "big story"           = "body"
+"executive quotes"    = "body"
+"chapo"               = "body"
 
-# ── Skip entirely (page furniture, TOC, copyright notices) ───────────────────
+# -- Skip entirely (page furniture, TOC, copyright) ---------------------------
 "copyright" = "skip"
 "margin1"   = "skip"
 "margin2"   = "skip"
