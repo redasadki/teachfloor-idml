@@ -1,6 +1,6 @@
 # idml-to-teachfloor
 
-![Version](https://img.shields.io/badge/version-1.3.7-blue)
+![Version](https://img.shields.io/badge/version-1.3.8-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -107,7 +107,7 @@ The converter reads the `<Hyperlink>` map from `designmap.xml` and matches every
 
 ## Handling pages with large headlines but no heading style
 
-Some InDesign layouts use oversized body text to create a headline effect instead of applying a heading paragraph style. Version 1.4.0 adds a **font-size heuristic** that promotes any `body` paragraph whose point size meets or exceeds a configurable threshold to `element_title`.
+Some InDesign layouts use oversized body text to create a headline effect instead of applying a heading paragraph style. The **font-size heuristic** promotes any `body` paragraph whose point size meets or exceeds a configurable threshold to `element_title`, recovering these as separate Teachfloor content elements automatically.
 
 The threshold is set in `styles.toml`:
 

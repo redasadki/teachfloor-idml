@@ -129,6 +129,7 @@ python3 idml_to_teachfloor_md.py MyReport-IDML/ --init
 | All styles map to `body` | Run `--init` first |
 | `# TODO: verify` entries | Open `styles.toml` and set the correct role |
 | Hyperlinks show as plain text | Check `designmap.xml` contains `<Hyperlink>` entries |
+| Large titles not getting `#` heading | Check `headline_point_size` in `[settings]` of `styles.toml` |
 
 ---
 
@@ -136,7 +137,7 @@ python3 idml_to_teachfloor_md.py MyReport-IDML/ --init
 
 Check your version:
 ```python
-__version__ = "1.3.7"
+__version__ = "1.3.8"
 ```
 
 To update: download the ZIP again and replace `idml_to_teachfloor_md.py`. Your `styles.toml` is not affected.

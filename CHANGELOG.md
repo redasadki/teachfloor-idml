@@ -5,6 +5,26 @@ This project follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.8] — 2026-06-18
+
+### Fixed
+- **Font-size heuristic restored** — `_paragraph_point_size()`,
+  `headline_point_size` in `_DEFAULT_SETTINGS`, the promotion block in
+  `parse_story()`, and the pass-through in `convert_folder()` were all
+  present in the v1.4.0 branch but were accidentally omitted during the
+  v1.3.4–1.3.7 hyperlink bugfix series. They are now reinstated alongside
+  all hyperlink fixes, making v1.3.8 the single authoritative version.
+
+  **What the heuristic does:** any `body` paragraph whose largest
+  `PointSize` attribute meets or exceeds `headline_point_size` (default
+  `40.0` pt) is promoted to `element_title`, recovering large headlines
+  that were sized up by hand in InDesign rather than via a heading
+  paragraph style (e.g. section-title pages with a coloured background).
+
+  Set `headline_point_size = 0` in `[settings]` to disable entirely.
+
+---
+
 ## [1.3.7] — 2026-06-18
 
 ### Fixed
@@ -68,27 +88,6 @@ This project follows [Semantic Versioning](https://semver.org/).
 - `to_teachfloor_md()` — joins consecutive same-style body paragraphs
   that end without sentence-closing punctuation (InDesign splits single
   visual lines at hyperlink boundaries into multiple PSRs).
-
----
-
-## [1.4.0] — 2026-06-18
-
-### Added
-- **Font-size heuristic** (`headline_point_size` setting) — body paragraphs
-  whose largest `PointSize` attribute meets or exceeds the configured threshold
-  are automatically promoted to `element_title`, starting a new Teachfloor
-  content element. This solves the problem of special pages (coloured
-  backgrounds, large display headlines) that were not being recognised as
-  separate elements because the layout artist sized up body text directly
-  instead of applying a heading paragraph style.
-- `_paragraph_point_size()` helper — scans all `CharacterStyleRange`
-  children of a paragraph for `PointSize` attributes (inline and inside
-  `<Properties>`), returns the maximum value found, or `0.0` if absent.
-- `headline_point_size` key in `_DEFAULT_SETTINGS` — default value `40.0` pt.
-  Set to `0` to disable the heuristic entirely.
-- `headline_point_size` documented in `styles.toml`.
-- `parse_story()` signature extended — accepts `headline_point_size: float
-  = 0.0`; `convert_folder()` passes the setting through on every story.
 
 ---
 

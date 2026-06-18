@@ -20,6 +20,21 @@ Config search order (without --config)
   2. <script_dir>/styles.toml
   3. Built-in defaults
 
+Changes in v1.3.8
+-----------------
+  * Restored font-size heuristic (introduced in v1.4.0 branch, accidentally
+    dropped during v1.3.5-1.3.7 bugfix series):
+    - _paragraph_point_size() scans CharacterStyleRange children of a PSR
+      for PointSize attributes (inline and inside <Properties>) and returns
+      the maximum value found.
+    - _DEFAULT_SETTINGS gains headline_point_size = 40.0 (pt). Set to 0
+      to disable.
+    - parse_story() accepts headline_point_size; any paragraph that resolves
+      to "body" AND whose point size meets or exceeds the threshold is
+      promoted to "element_title", recovering large headlines that were
+      sized up by hand rather than via a heading paragraph style.
+    - convert_folder() passes settings["headline_point_size"] through.
+
 Changes in v1.3.7
 -----------------
   * Fix: drop child.tail throughout _run_text and _collect_hls_text.
@@ -52,7 +67,7 @@ Changes in v1.3.4
   * to_teachfloor_md() joins split PSRs at hyperlink boundaries.
 """
 
-__version__ = "1.3.7"
+__version__ = "1.3.8"
 
 import sys
 import re
@@ -86,6 +101,10 @@ _DEFAULT_SETTINGS = {
     "default_role":    "body",
     "bold_keywords":   ["bold", "semibold", "extrabold", "black"],
     "italic_keywords": ["italic", "oblique"],
+    # Body paragraphs at or above this point size are promoted to
+    # element_title. Recovers large headlines styled by font size alone
+    # rather than with a heading paragraph style. Set to 0 to disable.
+    "headline_point_size": 40.0,
 }
 
 _DEFAULT_STYLE_MAP = {
@@ -366,6 +385,11 @@ def generate_toml(folder, output_path, force=False):
             'default_role = "body"', "",
             'bold_keywords   = ["bold", "semibold", "extrabold", "black"]',
             'italic_keywords = ["italic", "oblique"]',
+            "",
+            "# Body paragraphs at or above this point size are promoted to element_title.",
+            "# Recovers large headlines styled by font size alone (no heading style applied).",
+            "# Set to 0 to disable the heuristic entirely.",
+            "headline_point_size = 40.0",
             "", "",
             "# -----------------------------------------------------------------------------",
             "# [style_map]  InDesign paragraph style -> Teachfloor role",
@@ -596,7 +620,35 @@ def _merge_stray_fragments(text):
     return "  \n".join(merged)
 
 
-def parse_story(xml_bytes, get_role, extract_inline):
+def _paragraph_point_size(para):
+    """Return the largest PointSize found on the paragraph's character runs.
+
+    Checks the PointSize attribute on each CharacterStyleRange directly and
+    also inside any <Properties> child element. Returns 0.0 when no
+    PointSize is present. Used to detect headlines that lack a heading
+    paragraph style.
+    """
+    sizes = []
+    for cr in para:
+        if cr.tag != "CharacterStyleRange":
+            continue
+        val = cr.get("PointSize")
+        if val:
+            try:
+                sizes.append(float(val))
+            except ValueError:
+                pass
+        for prop in cr.iter("Properties"):
+            for e in prop.iter("PointSize"):
+                if e.text:
+                    try:
+                        sizes.append(float(e.text))
+                    except ValueError:
+                        pass
+    return max(sizes) if sizes else 0.0
+
+
+def parse_story(xml_bytes, get_role, extract_inline, headline_point_size=0.0):
     try:
         root = ET.fromstring(xml_bytes)
     except ET.ParseError as exc:
@@ -606,6 +658,12 @@ def parse_story(xml_bytes, get_role, extract_inline):
     for para in root.iter("ParagraphStyleRange"):
         raw  = para.get("AppliedParagraphStyle", "")
         role = get_role(raw)
+        # Font-size promotion: a paragraph that only resolves to "body"
+        # (no heading style was applied) is promoted to element_title when
+        # its largest PointSize meets or exceeds the configured threshold.
+        if role == "body" and headline_point_size > 0:
+            if _paragraph_point_size(para) >= headline_point_size:
+                role = "element_title"
         text = extract_inline(para)
         text = text.replace("\u2028", "\n").replace("\u2029", "\n")
         text = "\n".join(seg.strip() for seg in text.split("\n")).strip()
@@ -782,7 +840,8 @@ def convert_folder(folder, output_path, config_path):
     n_skipped = 0
 
     for sid, fpath in ordered:
-        paras = parse_story(fpath.read_bytes(), get_role, extract_inline)
+        paras = parse_story(fpath.read_bytes(), get_role, extract_inline,
+                            settings.get("headline_point_size", 0.0))
         if not paras:
             n_skipped += 1
             continue
