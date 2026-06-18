@@ -6,70 +6,50 @@ Converts an unpacked IDML folder to a single Teachfloor-writer Markdown file.
 
 Usage
 -----
-  # Normal conversion (reads styles.toml from the IDML folder, then next to
-  # this script, then falls back to built-in defaults):
   python3 idml_to_teachfloor_md.py <idml_folder> [output.md] [options]
-
-  # Bootstrap: scan the IDML and generate / merge a styles.toml:
   python3 idml_to_teachfloor_md.py <idml_folder> --init [--config my.toml] [--force]
 
 Options
 -------
-  --init          Scan the IDML folder and generate/merge a styles.toml.
-                  Does NOT produce a Markdown file.
-  --force         Used with --init: regenerate the TOML from scratch,
-                  overwriting any existing file.
-  --config FILE   Explicit TOML file path (overrides auto-search).
+  --init          Scan IDML, generate/merge styles.toml.  Does NOT convert.
+  --force         With --init: regenerate TOML from scratch.
+  --config FILE   Explicit TOML path.
 
 Config search order (without --config)
----------------------------------------
-  1. <idml_folder>/styles.toml    per-project config
-  2. <script_dir>/styles.toml     shipped default / GLF-T2R reference
-  3. Built-in defaults            (no file; warning printed)
+  1. <idml_folder>/styles.toml
+  2. <script_dir>/styles.toml
+  3. Built-in defaults
 
-See styles.toml for documentation of all settings and roles.
-
-Changes in v1.3.3
+Changes in v1.3.4
 -----------------
-  * Fix 1: _has_font_keyword now descends into wrapper sub-elements
-    (HyperlinkTextSource etc.) so bold/italic on hyperlinked text is
-    detected correctly.
-  * Fix 2: Removed the dead/dangerous substring fallback in get_role;
-    after the primary exact-match dict lookup, unknown styles now fall
-    straight to default_role with a logged warning.
-  * Fix 3: flush_quotes preserves Markdown hard-break trailing spaces
-    instead of rstrip()ing them away.
-  * Fix 4: citation_name / citation_role no longer strip literal asterisks
-    from content; double-wrapping is prevented by a starts/endswith check.
-  * Fix 5: _walk() now appends element.tail so text after inline wrapper
-    closing tags is no longer silently dropped.
-  * Fix 6: get_story_order() emits a [WARN] when the StoryList attribute
-    is absent and order is therefore approximate.
+  * Fix A: parse_hyperlink_map() reads <Hyperlink> entries from designmap.xml
+    and builds a {source_id -> url} lookup. _run_text uses it to emit
+    [display text](url) whenever a <HyperlinkTextSource> is encountered,
+    instead of emitting plain text.
+  * Fix B: to_teachfloor_md() detects InDesign's habit of splitting a single
+    visual paragraph across multiple ParagraphStyleRanges at hyperlink
+    boundaries. Consecutive same-style paragraphs where the previous one ends
+    without sentence-closing punctuation are joined inline, preventing
+    spurious blank lines around links.
 """
 
-__version__ = "1.3.3"
+__version__ = "1.3.4"
 
 import sys
+import re
 import argparse
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import date
 
-# ---------------------------------------------------------------------------
-# TOML - stdlib tomllib (Python 3.11+) or tomli backport (3.9 / 3.10)
-# ---------------------------------------------------------------------------
 try:
     import tomllib
 except ImportError:
     try:
-        import tomli as tomllib   # pip install tomli
+        import tomli as tomllib
     except ImportError:
         tomllib = None
 
-
-# ============================================================
-# CONSTANTS
-# ============================================================
 
 VALID_ROLES = frozenset({
     "lesson_title", "element_title", "h2",
@@ -78,11 +58,6 @@ VALID_ROLES = frozenset({
 })
 
 IDML_NS = "http://ns.adobe.com/AdobeInDesign/idml/1.0/packaging"
-
-
-# ============================================================
-# BUILT-IN DEFAULTS  (used only when no styles.toml is found)
-# ============================================================
 
 _DEFAULT_SETTINGS = {
     "default_role":    "body",
@@ -134,11 +109,6 @@ _DEFAULT_STYLE_MAP = {
     "tdm 1": "skip", "tdm 2": "skip", "header": "skip",
 }
 
-
-# ============================================================
-# HEURISTIC ROLE GUESSER
-# ============================================================
-
 _HEURISTIC_RULES = [
     ("copyright",   "skip",          True),
     ("margin",      "skip",          True),
@@ -178,10 +148,6 @@ def _guess_role(style_name):
     return "body", False
 
 
-# ============================================================
-# CONFIG LOADER
-# ============================================================
-
 def resolve_config_path(idml_folder, explicit):
     if explicit:
         return Path(explicit)
@@ -192,12 +158,10 @@ def resolve_config_path(idml_folder, explicit):
 
 
 def load_config(config_path):
-    """Load TOML config; return (settings, style_map)."""
     if not config_path.exists():
         print(f"  [INFO] No config at {config_path} - using built-in defaults.",
               file=sys.stderr)
         return _DEFAULT_SETTINGS.copy(), _DEFAULT_STYLE_MAP.copy()
-
     if tomllib is None:
         print(
             "  [WARN] TOML support unavailable.\n"
@@ -207,13 +171,11 @@ def load_config(config_path):
             file=sys.stderr,
         )
         return _DEFAULT_SETTINGS.copy(), _DEFAULT_STYLE_MAP.copy()
-
     try:
         with open(config_path, "rb") as fh:
             data = tomllib.load(fh)
     except Exception as exc:
         sys.exit(f"ERROR: Cannot read {config_path}: {exc}")
-
     settings  = {**_DEFAULT_SETTINGS, **data.get("settings", {})}
     raw_map   = data.get("style_map", {})
     style_map = {}
@@ -225,15 +187,45 @@ def load_config(config_path):
                   file=sys.stderr)
             continue
         style_map[sl] = rl
-
     print(f"  Config     : {config_path.name} "
-          f"({len(style_map)} mappings, default_role='{settings['default_role']}')"
-    )
+          f"({len(style_map)} mappings, default_role='{settings['default_role']}')")
     return settings, style_map
 
 
 # ============================================================
-# INIT: discover styles & generate / merge styles.toml
+# FIX A: HYPERLINK MAP  (new in v1.3.4)
+# ============================================================
+
+def parse_hyperlink_map(designmap_path):
+    """Return {source_id: url} from <Hyperlink> elements in designmap.xml.
+
+    Only URL-type destinations are included (Destination type="object" whose
+    text starts with "HyperlinkURLDestination"); internal/anchor destinations
+    are skipped so the caller falls back to plain text for those.
+    """
+    hmap = {}
+    try:
+        root = ET.fromstring(designmap_path.read_bytes())
+    except ET.ParseError:
+        return hmap
+    for hyperlink in root.iter("Hyperlink"):
+        source = hyperlink.get("Source", "").strip()
+        if not source:
+            continue
+        for dest in hyperlink.iter("Destination"):
+            if dest.get("type", "") == "object":
+                raw = (dest.text or "").strip()
+                # Strip leading "HyperlinkURLDestination" prefix (with or
+                # without a slash separator).
+                url = re.sub(r"^HyperlinkURLDestination/?", "", raw).strip()
+                if url:
+                    hmap[source] = url
+                    break
+    return hmap
+
+
+# ============================================================
+# INIT
 # ============================================================
 
 def discover_all_styles(folder):
@@ -267,19 +259,15 @@ def _load_existing_toml_map(path):
 def generate_toml(folder, output_path, force=False):
     folder = folder.resolve()
     print(f"\n  Scanning IDML stories in {folder} ...")
-
     all_styles = discover_all_styles(folder)
     if not all_styles:
         sys.exit("ERROR: No paragraph styles found - is this a valid unpacked IDML folder?")
-
     print(f"  Found {len(all_styles)} unique paragraph styles.")
-
     existing    = {} if force else _load_existing_toml_map(output_path)
     new_styles  = [s for s in all_styles if s not in existing]
     kept_styles = [s for s in all_styles if s in existing]
     print(f"  Already mapped : {len(kept_styles)}")
     print(f"  New styles     : {len(new_styles)}")
-
     grouped   = {}
     uncertain = []
     for style in new_styles:
@@ -287,10 +275,8 @@ def generate_toml(folder, output_path, force=False):
         grouped.setdefault(role, []).append((style, confident))
         if not confident:
             uncertain.append(style)
-
     confident_count = len(new_styles) - len(uncertain)
     pct = int(100 * confident_count / len(new_styles)) if new_styles else 100
-
     role_order = [
         "lesson_title", "element_title", "h2",
         "quote", "citation_name", "citation_role",
@@ -308,9 +294,7 @@ def generate_toml(folder, output_path, force=False):
         "body":           "Body / editorial text",
         "skip":           "Skip entirely (page furniture, TOC, copyright)",
     }
-
     lines = []
-
     if force or not output_path.exists():
         lines += [
             "# =============================================================================",
@@ -374,10 +358,8 @@ def generate_toml(folder, output_path, force=False):
                 todo = "" if confident else "  # TODO: verify"
                 lines.append(f'"{style}" = "{role}"{todo}')
             lines.append("")
-
     toml_text = "\n".join(lines).rstrip() + "\n"
     output_path.write_text(toml_text, encoding="utf-8")
-
     print(f"\n  -> {output_path}")
     print(f"  {len(new_styles)} new style(s) written. {len(uncertain)} marked TODO: verify.\n")
     print("  Next steps:")
@@ -396,10 +378,6 @@ def normalize_style(raw):
 def make_get_role(style_map, default_role):
     def get_role(raw):
         norm = normalize_style(raw)
-        # FIX 2: exact-match only; the old substring fallback was dead code
-        # that could silently mis-role paragraphs (e.g. "num" matching
-        # "document number"). Unknown styles now fall to default_role with
-        # an [INFO] log so problems are visible.
         role = style_map.get(norm)
         if role is not None:
             return role
@@ -410,8 +388,6 @@ def make_get_role(style_map, default_role):
 
 
 def _has_font_keyword(cr, keywords):
-    # FIX 1: descend into wrapper sub-elements (HyperlinkTextSource etc.)
-    # so bold/italic character styles on hyperlinked text are detected.
     def _check(node):
         for attr in ("FontStyle", "AppliedCharacterStyle"):
             if any(k in node.get(attr, "").lower() for k in keywords):
@@ -427,18 +403,16 @@ def _has_font_keyword(cr, keywords):
     return _check(cr)
 
 
-def _run_text(cr):
+def _run_text(cr, hyperlink_map):
     """Collect text from a CharacterStyleRange in document order.
 
-    Handles:
-      <Content>   - literal text, appended directly.
-      <Br/>       - InDesign forced line break, converted to newline.
-      wrappers    - e.g. <HyperlinkTextSource>, <CrossReferenceSource>:
-                    descended recursively; element.tail appended after
-                    descent (FIX 5) so text after closing tags is kept.
+    FIX A: When a <HyperlinkTextSource> is encountered, its display text is
+    collected and wrapped as [text](url) using hyperlink_map keyed on the
+    HyperlinkTextSource's Self attribute. If the URL is not found (internal
+    link, page anchor, etc.), plain text is emitted unchanged.
 
-    A nested <CharacterStyleRange> is NOT descended into to avoid
-    double-emission (the outer loop visits every CSR independently).
+    Also handles: <Content>, <Br/>, other wrappers descended recursively.
+    element.tail is appended after each wrapper (v1.3.3 Fix 5).
     """
     parts = []
 
@@ -447,23 +421,51 @@ def _run_text(cr):
             if child.tag == "Content":
                 if child.text:
                     parts.append(child.text)
-                if child.tail:          # FIX 5
+                if child.tail:
                     parts.append(child.tail)
             elif child.tag == "Br":
                 parts.append("\n")
-                if child.tail:          # FIX 5
+                if child.tail:
+                    parts.append(child.tail)
+            elif child.tag == "HyperlinkTextSource":
+                # FIX A: collect link display text then wrap as [text](url).
+                link_parts = []
+                def _collect(n):
+                    for c in n:
+                        if c.tag == "Content":
+                            if c.text:
+                                link_parts.append(c.text)
+                            if c.tail:
+                                link_parts.append(c.tail)
+                        elif c.tag == "Br":
+                            link_parts.append("\n")
+                            if c.tail:
+                                link_parts.append(c.tail)
+                        elif c.tag != "CharacterStyleRange":
+                            _collect(c)
+                            if c.tail:
+                                link_parts.append(c.tail)
+                _collect(child)
+                display = "".join(link_parts).strip()
+                source_id = child.get("Self", "").strip()
+                url = hyperlink_map.get(source_id, "")
+                if display and url:
+                    parts.append(f"[{display}]({url})")
+                elif display:
+                    parts.append(display)
+                if child.tail:
                     parts.append(child.tail)
             elif child.tag != "CharacterStyleRange":
                 _walk(child)
-                if child.tail:          # FIX 5: text after wrapper closing tag
+                if child.tail:
                     parts.append(child.tail)
 
     _walk(cr)
     return "".join(parts)
 
 
-def make_inline_extractor(bold_keywords, italic_keywords):
-    """Return an inline-text extractor closed over font keyword lists."""
+def make_inline_extractor(bold_keywords, italic_keywords, hyperlink_map):
+    """Return inline-text extractor closed over font keywords and hyperlink map."""
     def extract_inline(para):
         pieces = []
         for cr in para:
@@ -471,7 +473,7 @@ def make_inline_extractor(bold_keywords, italic_keywords):
                 continue
             bold   = _has_font_keyword(cr, bold_keywords)
             italic = _has_font_keyword(cr, italic_keywords)
-            run = _run_text(cr)
+            run = _run_text(cr, hyperlink_map)
             if not run:
                 continue
             core   = run.strip()
@@ -514,24 +516,29 @@ def parse_story(xml_bytes, get_role, extract_inline):
 # MARKDOWN RENDERER
 # ============================================================
 
+# Sentence-ending punctuation: a body paragraph that ends with one of these
+# is treated as a complete thought — the next same-style paragraph gets a
+# blank-line separator. Without these, InDesign likely split a single visual
+# line at a hyperlink boundary, so we join the fragments inline.
+_SENTENCE_END = re.compile(r'[.!?:)\]"\'»—–]\s*$')
+
+
 def to_teachfloor_md(paragraphs):
     lines      = []
     ol_n       = 0
     prev_role  = None
+    prev_style = None
     in_lesson  = False
     quote_buf  = []
 
     def flush_quotes():
         for q in quote_buf:
             for ln in q.split("\n"):
-                # FIX 3: preserve Markdown hard-break trailing spaces ("  ")
-                # instead of rstrip()ing them away, which collapsed line
-                # breaks inside blockquotes into merged paragraphs.
                 suffix = "  " if ln.endswith("  ") else ""
                 lines.append(f"> {ln.strip()}{suffix}")
         quote_buf.clear()
 
-    for role, _style, text in paragraphs:
+    for role, style, text in paragraphs:
         if role != "ol":
             ol_n = 0
         if role not in ("quote", "citation_name", "citation_role"):
@@ -543,14 +550,16 @@ def to_teachfloor_md(paragraphs):
             lines.append("---")
             lines.append(f"# {text}")
             in_lesson = True
-            prev_role = role
+            prev_role  = role
+            prev_style = style
             continue
 
         if not in_lesson:
             lines.append("---")
             lines.append(f"# {text}")
             in_lesson = True
-            prev_role = role
+            prev_role  = role
+            prev_style = style
             continue
 
         if role == "element_title":
@@ -563,14 +572,11 @@ def to_teachfloor_md(paragraphs):
             quote_buf.append(text)
         elif role == "citation_name":
             flush_quotes()
-            # FIX 4: don't strip all asterisks (destroys literal * in content);
-            # instead avoid double-wrapping by checking existing markers.
             t = text.strip()
             line = t if (t.startswith("**") and t.endswith("**")) else f"**{t}**"
             lines.append(line)
         elif role == "citation_role":
             flush_quotes()
-            # FIX 4: same - only wrap if not already wrapped.
             t = text.strip()
             line = t if (t.startswith("*") and t.endswith("*")) else f"*{t}*"
             lines.append(line)
@@ -580,11 +586,24 @@ def to_teachfloor_md(paragraphs):
             ol_n += 1
             lines.append(f"{ol_n}. {text.replace(chr(10), chr(10) + '   ')}")
         else:  # body
-            if prev_role == "body":
-                lines.append("")
-            lines.append(text)
+            # FIX B: InDesign splits a single visual paragraph into multiple
+            # ParagraphStyleRanges at hyperlink boundaries. Detect this by
+            # checking whether the previous body paragraph ended without
+            # sentence-closing punctuation AND shares the same style.
+            # If so, join inline with a space rather than a blank-line gap.
+            if (prev_role == "body"
+                    and prev_style == style
+                    and lines
+                    and lines[-1]
+                    and not _SENTENCE_END.search(lines[-1])):
+                lines[-1] = lines[-1].rstrip() + " " + text
+            else:
+                if prev_role == "body":
+                    lines.append("")
+                lines.append(text)
 
-        prev_role = role
+        prev_role  = role
+        prev_style = style
 
     flush_quotes()
     return "\n".join(lines).strip()
@@ -605,7 +624,6 @@ def get_story_order(designmap_path):
     story_list_str = root.attrib.get("StoryList", "")
     if story_list_str:
         return story_list_str.split()
-    # FIX 6: emit a warning so the user knows order is approximate.
     print(
         "  [WARN] StoryList attribute missing in designmap - "
         "story order may be approximate. Verify the output.",
@@ -636,15 +654,20 @@ def convert_folder(folder, output_path, config_path):
     folder = folder.resolve()
 
     settings, style_map = load_config(config_path)
-    get_role       = make_get_role(style_map, settings["default_role"])
-    extract_inline = make_inline_extractor(
-        settings["bold_keywords"], settings["italic_keywords"]
-    )
+    get_role = make_get_role(style_map, settings["default_role"])
 
     designmap = find_designmap(folder)
     if not designmap:
         sys.exit(f"ERROR: No designmap*.xml found in {folder}")
     print(f"  Designmap  : {designmap.name}")
+
+    # FIX A: build hyperlink map from designmap before parsing stories.
+    hyperlink_map = parse_hyperlink_map(designmap)
+    print(f"  Hyperlinks : {len(hyperlink_map)} URL destinations indexed")
+
+    extract_inline = make_inline_extractor(
+        settings["bold_keywords"], settings["italic_keywords"], hyperlink_map
+    )
 
     story_order = get_story_order(designmap)
     print(f"  StoryList  : {len(story_order)} story IDs")
@@ -675,7 +698,6 @@ def convert_folder(folder, output_path, config_path):
 
     md = to_teachfloor_md(all_paras)
 
-    # Output path: bare filename -> anchored to IDML folder (not CWD).
     if output_path is None:
         output_path = folder / "output.md"
     else:
