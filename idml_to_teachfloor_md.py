@@ -20,20 +20,31 @@ Config search order (without --config)
   2. <script_dir>/styles.toml
   3. Built-in defaults
 
+Changes in v1.3.5
+-----------------
+  * Fix 1: parse_hyperlink_map() now percent-decodes URLs (InDesign stores
+    them as e.g. https%3a//...), strips InDesign duplicate-name suffixes
+    (" 1", " 2" etc.), and falls back to the Hyperlink Name attribute for
+    destinations of type="list" (used for simple URL/email hyperlinks that
+    have no shared URL-destination element). This covers the majority of
+    hyperlinks in practice.
+  * Fix 2: parse_story() collapses runs of 2+ consecutive hard-break
+    sequences ("  \\n") down to a single one, removing the spurious blank
+    lines that InDesign inserts around every hyperlink via extra <Br/> nodes.
+  * Fix 3: _merge_stray_fragments() joins any hard-break line consisting
+    solely of digits/punctuation onto the preceding content line, preventing
+    lone "." or DOI suffix fragments from appearing as separate lines.
+
 Changes in v1.3.4
 -----------------
-  * Fix A: parse_hyperlink_map() reads <Hyperlink> entries from designmap.xml
-    and builds a {source_id -> url} lookup. _run_text uses it to emit
-    [display text](url) whenever a <HyperlinkTextSource> is encountered,
-    instead of emitting plain text.
-  * Fix B: to_teachfloor_md() detects InDesign's habit of splitting a single
-    visual paragraph across multiple ParagraphStyleRanges at hyperlink
-    boundaries. Consecutive same-style paragraphs where the previous one ends
-    without sentence-closing punctuation are joined inline, preventing
-    spurious blank lines around links.
+  * parse_hyperlink_map() introduced: reads <Hyperlink> entries from
+    designmap.xml and builds a {source_id -> url} lookup.
+  * _run_text() wraps <HyperlinkTextSource> content as [display](url).
+  * to_teachfloor_md() joins consecutive same-style body paragraphs that
+    end without sentence-closing punctuation (InDesign PSR splits at links).
 """
 
-__version__ = "1.3.4"
+__version__ = "1.3.5"
 
 import sys
 import re
@@ -41,6 +52,10 @@ import argparse
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import date
+try:
+    from urllib.parse import unquote as url_unquote
+except ImportError:
+    def url_unquote(s): return s
 
 try:
     import tomllib
@@ -193,34 +208,60 @@ def load_config(config_path):
 
 
 # ============================================================
-# FIX A: HYPERLINK MAP  (new in v1.3.4)
+# HYPERLINK MAP
 # ============================================================
 
 def parse_hyperlink_map(designmap_path):
     """Return {source_id: url} from <Hyperlink> elements in designmap.xml.
 
-    Only URL-type destinations are included (Destination type="object" whose
-    text starts with "HyperlinkURLDestination"); internal/anchor destinations
-    are skipped so the caller falls back to plain text for those.
+    Handles two destination patterns InDesign uses:
+
+    1. type="object" — the URL is stored as the element text, prefixed with
+       "HyperlinkURLDestination/".  InDesign percent-encodes the URL
+       (e.g. https%3a// instead of https://) so we URL-decode it.
+
+    2. type="list" (or absent) — no URL destination element; the URL is the
+       Hyperlink Name attribute itself (InDesign uses this for simple URL /
+       email hyperlinks that don't share a named URL destination).  We accept
+       Names that look like a URL (http/https prefix) or an email address.
+
+    In both cases we strip InDesign's duplicate-name numeric suffixes
+    (" 1", " 2" … appended when the same URL appears more than once).
     """
     hmap = {}
     try:
         root = ET.fromstring(designmap_path.read_bytes())
     except ET.ParseError:
         return hmap
+
     for hyperlink in root.iter("Hyperlink"):
         source = hyperlink.get("Source", "").strip()
         if not source:
             continue
+
+        url = ""
+
+        # Pattern 1: explicit URL destination element
         for dest in hyperlink.iter("Destination"):
             if dest.get("type", "") == "object":
                 raw = (dest.text or "").strip()
-                # Strip leading "HyperlinkURLDestination" prefix (with or
-                # without a slash separator).
-                url = re.sub(r"^HyperlinkURLDestination/?", "", raw).strip()
-                if url:
-                    hmap[source] = url
+                candidate = re.sub(r"^HyperlinkURLDestination/?", "", raw).strip()
+                candidate = re.sub(r"\s+\d+$", "", candidate).strip()
+                if candidate:
+                    url = url_unquote(candidate)
                     break
+
+        # Pattern 2: fallback to Hyperlink Name attribute
+        if not url:
+            name = re.sub(r"\s+\d+$", "", hyperlink.get("Name", "").strip()).strip()
+            if name.startswith(("http://", "https://", "mailto:")):
+                url = name
+            elif "@" in name and "." in name and " " not in name:
+                url = "mailto:" + name
+
+        if url:
+            hmap[source] = url
+
     return hmap
 
 
@@ -406,13 +447,11 @@ def _has_font_keyword(cr, keywords):
 def _run_text(cr, hyperlink_map):
     """Collect text from a CharacterStyleRange in document order.
 
-    FIX A: When a <HyperlinkTextSource> is encountered, its display text is
-    collected and wrapped as [text](url) using hyperlink_map keyed on the
-    HyperlinkTextSource's Self attribute. If the URL is not found (internal
-    link, page anchor, etc.), plain text is emitted unchanged.
-
-    Also handles: <Content>, <Br/>, other wrappers descended recursively.
-    element.tail is appended after each wrapper (v1.3.3 Fix 5).
+    <HyperlinkTextSource> nodes are wrapped as [display](url) using the
+    hyperlink_map.  If the source ID is not in the map (internal anchor,
+    cross-reference, etc.) the display text is emitted as plain text.
+    <Content> and <Br/> are handled as before; element.tail is always
+    appended after wrapper closing tags (v1.3.3 Fix 5).
     """
     parts = []
 
@@ -428,7 +467,6 @@ def _run_text(cr, hyperlink_map):
                 if child.tail:
                     parts.append(child.tail)
             elif child.tag == "HyperlinkTextSource":
-                # FIX A: collect link display text then wrap as [text](url).
                 link_parts = []
                 def _collect(n):
                     for c in n:
@@ -493,6 +531,29 @@ def make_inline_extractor(bold_keywords, italic_keywords, hyperlink_map):
     return extract_inline
 
 
+# Lines consisting only of digits and/or punctuation — these are stray
+# fragments that InDesign placed after a hyperlink in a separate run
+# (e.g. a DOI suffix "15126588" or a sentence-ending ".").
+_STRAY_FRAGMENT = re.compile(r'^[\d\s.,;:!?\u2019\u201c\u201d\u2014\u2013()\[\]]+$')
+
+
+def _merge_stray_fragments(text):
+    """Join bare punctuation/digit lines onto the preceding content line.
+
+    Input/output use "  \\n" as the hard-break separator (as produced by
+    parse_story after the newline-to-hard-break conversion).
+    """
+    raw_lines = text.split("  \n")
+    merged = []
+    for line in raw_lines:
+        stripped = line.strip()
+        if stripped and _STRAY_FRAGMENT.match(stripped) and merged:
+            merged[-1] = merged[-1].rstrip() + stripped
+        else:
+            merged.append(line)
+    return "  \n".join(merged)
+
+
 def parse_story(xml_bytes, get_role, extract_inline):
     try:
         root = ET.fromstring(xml_bytes)
@@ -507,6 +568,11 @@ def parse_story(xml_bytes, get_role, extract_inline):
         text = text.replace("\u2028", "\n").replace("\u2029", "\n")
         text = "\n".join(seg.strip() for seg in text.split("\n")).strip()
         text = text.replace("\n", "  \n")
+        # Collapse 2+ consecutive hard-breaks to one: InDesign wraps every
+        # hyperlink with extra <Br/> nodes that produce spurious blank lines.
+        text = re.sub(r"(  \n){2,}", "  \n", text).strip()
+        # Merge lone punctuation/digit fragments onto the preceding line.
+        text = _merge_stray_fragments(text)
         if text and role != "skip":
             result.append((role, normalize_style(raw), text))
     return result
@@ -520,7 +586,7 @@ def parse_story(xml_bytes, get_role, extract_inline):
 # is treated as a complete thought — the next same-style paragraph gets a
 # blank-line separator. Without these, InDesign likely split a single visual
 # line at a hyperlink boundary, so we join the fragments inline.
-_SENTENCE_END = re.compile(r'[.!?:)\]"\'»—–]\s*$')
+_SENTENCE_END = re.compile(r'[.!?:)\]"\'\u00bb\u2014\u2013]\s*$')
 
 
 def to_teachfloor_md(paragraphs):
@@ -586,7 +652,7 @@ def to_teachfloor_md(paragraphs):
             ol_n += 1
             lines.append(f"{ol_n}. {text.replace(chr(10), chr(10) + '   ')}")
         else:  # body
-            # FIX B: InDesign splits a single visual paragraph into multiple
+            # InDesign splits a single visual paragraph into multiple
             # ParagraphStyleRanges at hyperlink boundaries. Detect this by
             # checking whether the previous body paragraph ended without
             # sentence-closing punctuation AND shares the same style.
@@ -661,9 +727,8 @@ def convert_folder(folder, output_path, config_path):
         sys.exit(f"ERROR: No designmap*.xml found in {folder}")
     print(f"  Designmap  : {designmap.name}")
 
-    # FIX A: build hyperlink map from designmap before parsing stories.
     hyperlink_map = parse_hyperlink_map(designmap)
-    print(f"  Hyperlinks : {len(hyperlink_map)} URL destinations indexed")
+    print(f"  Hyperlinks : {len(hyperlink_map)} destinations indexed")
 
     extract_inline = make_inline_extractor(
         settings["bold_keywords"], settings["italic_keywords"], hyperlink_map
